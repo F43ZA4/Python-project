@@ -785,6 +785,8 @@ async def main():
     
     # 2. Set Commands for the Menu
     await bot.set_my_commands([
+        types.BotCommand(command="notify", description="ADMIN: Send message to all users"),
+        types.BotCommand(command="cancel", description="Cancel current action")
         types.BotCommand(command="start", description="Main menu"),
         types.BotCommand(command="confess", description="Post a confession"),
         types.BotCommand(command="hot", description="Trending posts"),
