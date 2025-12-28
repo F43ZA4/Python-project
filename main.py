@@ -363,6 +363,76 @@ async def handle_pagination(cb: types.CallbackQuery):
 # ==========================================
 # MODULE 7: ADMIN ACTIONS & HOT LIST
 # ==========================================
+# ==========================================
+# MODULE 7.5: ADVANCED MODERATION
+# ==========================================
+
+@dp.message(Command("warn"))
+async def cmd_warn(message: types.Message, command: CommandObject):
+    if message.chat.id != ADMIN_ID and message.from_user.id not in ADMIN_IDS: return
+    if not command.args: return await message.answer("Usage: /warn [user_id] [reason]")
+    
+    try:
+        args = command.args.split(maxsplit=1)
+        target_id = int(args[0])
+        reason = args[1] if len(args) > 1 else "No reason provided."
+        
+        async with db.acquire() as conn:
+            # Penalize Aura points
+            await conn.execute("UPDATE user_points SET points = points - 50 WHERE user_id = $1", target_id)
+            
+        await message.answer(f"⚠️ User <code>{target_id}</code> has been warned. -50 Aura.")
+        await safe_send_message(target_id, f"⚠️ <b>Official Warning:</b>\nYou have been warned by an admin.\nReason: {reason}\n<i>Continued violations will lead to a block.</i>")
+    except ValueError:
+        await message.answer("Invalid User ID.")
+
+@dp.message(Command("block"))
+async def cmd_block(message: types.Message, command: CommandObject):
+    if message.chat.id != ADMIN_ID and message.from_user.id not in ADMIN_IDS: return
+    if not command.args: return await message.answer("Usage: /block [user_id] [days] [reason]")
+    
+    try:
+        args = command.args.split(maxsplit=2)
+        target_id = int(args[0])
+        days = int(args[1])
+        reason = args[2] if len(args) > 2 else "Violation of rules."
+        until = datetime.now() + timedelta(days=days)
+        
+        async with db.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO user_status (user_id, is_blocked, blocked_until, block_reason)
+                VALUES ($1, True, $2, $3)
+                ON CONFLICT (user_id) DO UPDATE SET is_blocked = True, blocked_until = $2, block_reason = $3
+            """, target_id, until, reason)
+            
+        await message.answer(f"🚫 User <code>{target_id}</code> blocked for {days} days.")
+        await safe_send_message(target_id, f"🚫 <b>You have been blocked:</b>\nDuration: {days} days\nReason: {reason}")
+    except Exception as e:
+        await message.answer(f"Error: {e}")
+
+@dp.message(Command("pblock"))
+async def cmd_pblock(message: types.Message, command: CommandObject):
+    if message.chat.id != ADMIN_ID and message.from_user.id not in ADMIN_IDS: return
+    if not command.args: return await message.answer("Usage: /pblock [user_id]")
+    
+    target_id = int(command.args)
+    async with db.acquire() as conn:
+        await conn.execute("UPDATE user_status SET is_blocked = True, blocked_until = NULL WHERE user_id = $1", target_id)
+        
+    await message.answer(f"💀 User <code>{target_id}</code> permanently banned.")
+    await safe_send_message(target_id, "❌ <b>Permanent Ban:</b>\nYou have been permanently banned from this bot.")
+
+@dp.message(Command("unblock"))
+async def cmd_unblock(message: types.Message, command: CommandObject):
+    if message.chat.id != ADMIN_ID and message.from_user.id not in ADMIN_IDS: return
+    if not command.args: return await message.answer("Usage: /unblock [user_id]")
+    
+    target_id = int(command.args)
+    async with db.acquire() as conn:
+        await conn.execute("UPDATE user_status SET is_blocked = False WHERE user_id = $1", target_id)
+        
+    await message.answer(f"✅ User <code>{target_id}</code> unblocked.")
+    await safe_send_message(target_id, "✅ Your block has been lifted. Please follow the rules.")
 
 @dp.callback_query(F.data.startswith("adm_approve_"))
 async def approve_submission(cb: types.CallbackQuery):
@@ -671,3 +741,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot successfully stopped.")
+
