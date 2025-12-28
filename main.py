@@ -21,6 +21,29 @@ from typing import Optional, Tuple, Dict, Any, List
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiohttp import web
 
+import logging
+import asyncpg
+import os
+import asyncio
+from aiogram import Bot, Dispatcher, types, F, html
+from aiogram.enums import ParseMode
+from aiogram.filters import Command, CommandObject, StateFilter
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
+from dotenv import load_dotenv
+from aiogram.client.default import DefaultBotProperties
+from aiogram.types import (
+    InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup,
+    KeyboardButton, ReplyKeyboardRemove, ForceReply
+)
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from datetime import datetime, timedelta
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
+from typing import Optional, Tuple, Dict, Any, List
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
+from aiohttp import web
+
 # ==========================================
 # MODULE 1: CONFIGURATION & CONSTANTS
 # ==========================================
@@ -89,7 +112,7 @@ async def setup_db():
     db = await asyncpg.create_pool(DATABASE_URL)
     bot_info = await bot.get_me()
     async with db.acquire() as conn:
-        # Initializing core tables for the 1000-line logic
+        # Initializing core tables
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS confessions (
                 id SERIAL PRIMARY KEY, 
@@ -128,32 +151,25 @@ async def setup_db():
                 reaction_type VARCHAR(10), 
                 UNIQUE(comment_id, user_id)
             );
+
+            -- NEW: Dynamic Admin Table
+            CREATE TABLE IF NOT EXISTS authorized_admins (
+                user_id BIGINT PRIMARY KEY, 
+                added_by BIGINT, 
+                added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
-class BlockMiddleware(BaseMiddleware):
-    async def __call__(self, handler, event, data):
-        user = data.get("event_from_user")
-        if user:
-            async with db.acquire() as conn:
-                status = await conn.fetchrow(
-                    "SELECT is_blocked, blocked_until FROM user_status WHERE user_id = $1", 
-                    user.id
-                )
-                if status and status['is_blocked']:
-                    # Auto-unblock check logic
-                    if status['blocked_until'] and datetime.now(status['blocked_until'].tzinfo) > status['blocked_until']:
-                        await conn.execute("UPDATE user_status SET is_blocked = False WHERE user_id = $1", user.id)
-                    else:
-                        if isinstance(event, types.CallbackQuery):
-                            await event.answer("🚫 You are currently blocked.", show_alert=True)
-                        else:
-                            await event.answer("🚫 You are currently blocked from using this bot.")
-                        return
-        return await handler(event, data)
+        # --- SYNC ADMINS FROM DATABASE ---
+        # This ensures admins added via /addadmin stay active after a restart
+        rows = await conn.fetch("SELECT user_id FROM authorized_admins")
+        for r in rows:
+            if r['user_id'] not in ADMIN_IDS:
+                ADMIN_IDS.append(r['user_id'])
+    
+    print(f"✅ DB Ready. Admins synced: {len(ADMIN_IDS)}")
 
-# Registering the middleware to the dispatcher
-dp.message.outer_middleware(BlockMiddleware())
-dp.callback_query.outer_middleware(BlockMiddleware())
+# [Keep your BlockMiddleware class and registration below this]
 # ==========================================
 # MODULE 5: CONFESSION SUBMISSION LOGIC
 # ==========================================
@@ -712,6 +728,69 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Current action cancelled.", reply_markup=ReplyKeyboardRemove())
 # ==========================================
+# MODULE 10: DYNAMIC ADMIN MANAGEMENT
+# ==========================================
+
+# Run this once in your setup_db function or manually in SQL console:
+# CREATE TABLE IF NOT EXISTS authorized_admins (user_id BIGINT PRIMARY KEY, added_by BIGINT, added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+
+@dp.message(Command("addadmin"))
+async def cmd_add_admin(message: types.Message, command: CommandObject):
+    """Only the original creator (PRIMARY_ADMIN) can add other admins."""
+    if message.from_user.id != PRIMARY_ADMIN:
+        return await message.answer("❌ Only the Creator can promote others to Admin.")
+    
+    if not command.args:
+        return await message.answer("Usage: /addadmin [user_id]")
+    
+    try:
+        new_admin_id = int(command.args)
+        async with db.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO authorized_admins (user_id, added_by) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                new_admin_id, message.from_user.id
+            )
+            # Update the local list so the bot recognizes them immediately
+            if new_admin_id not in ADMIN_IDS:
+                ADMIN_IDS.append(new_admin_id)
+        
+        await message.answer(f"✅ User <code>{new_admin_id}</code> is now an Admin.")
+        await safe_send_message(new_admin_id, "🎖 You have been promoted to Admin in this bot!")
+    except ValueError:
+        await message.answer("Invalid User ID.")
+
+@dp.message(Command("removeadmin"))
+async def cmd_remove_admin(message: types.Message, command: CommandObject):
+    """Only the original creator can demote admins."""
+    if message.from_user.id != PRIMARY_ADMIN:
+        return await message.answer("❌ Only the Creator can remove Admins.")
+    
+    try:
+        target_id = int(command.args)
+        if target_id == PRIMARY_ADMIN:
+            return await message.answer("❌ You cannot remove yourself.")
+            
+        async with db.acquire() as conn:
+            await conn.execute("DELETE FROM authorized_admins WHERE user_id = $1", target_id)
+            if target_id in ADMIN_IDS:
+                ADMIN_IDS.remove(target_id)
+                
+        await message.answer(f"🗑 User <code>{target_id}</code> has been removed from Admins.")
+    except Exception:
+        await message.answer("Usage: /removeadmin [user_id]")
+
+@dp.message(Command("adminlist"))
+async def cmd_admin_list(message: types.Message):
+    """Shows all current admins."""
+    if not is_admin(message.from_user.id): return
+    
+    admin_str = "<b>👥 Current Administrators:</b>\n\n"
+    for i, aid in enumerate(ADMIN_IDS, 1):
+        tag = "👑 Creator" if aid == PRIMARY_ADMIN else "🛠 Admin"
+        admin_str += f"{i}. <code>{aid}</code> ({tag})\n"
+    
+    await message.answer(admin_str)
+# ==========================================
 # MODULE 9: MAIN ENTRY, RULES & STARTUP
 # ==========================================
 
@@ -785,6 +864,9 @@ async def main():
     
     # 2. Set Commands for the Menu
     await bot.set_my_commands([
+        types.BotCommand(command="addadmin", description="CREATOR: Add a new admin"),
+        types.BotCommand(command="removeadmin", description="CREATOR: Remove an admin"),
+        types.BotCommand(command="adminlist", description="ADMIN: View all staff")
         types.BotCommand(command="notify", description="ADMIN: Send message to all users"),
         types.BotCommand(command="cancel", description="Cancel current action")
         types.BotCommand(command="start", description="Main menu"),
@@ -814,5 +896,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot successfully stopped.")
+
 
 
