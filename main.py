@@ -641,6 +641,77 @@ async def admin_delete_comment(cb: types.CallbackQuery):
     await cb.message.delete()
     await cb.answer("Comment deleted and penalty applied.", show_alert=True)
 # ==========================================
+# MODULE 8.5: NOTIFICATION (BROADCAST) SYSTEM
+# ==========================================
+
+class BroadcastState(StatesGroup):
+    waiting_for_broadcast_message = State()
+
+@dp.message(Command("notify"))
+async def cmd_notify(message: types.Message, state: FSMContext):
+    """Admin command to start a broadcast."""
+    if message.chat.id != ADMIN_ID and message.from_user.id not in ADMIN_IDS:
+        return
+    
+    await state.set_state(BroadcastState.waiting_for_broadcast_message)
+    await message.answer(
+        "📢 <b>Broadcast Mode Active</b>\n\n"
+        "Please send the message (text, photo, or video) you want to send to ALL users.\n"
+        "Type /cancel to abort.",
+        reply_markup=ForceReply()
+    )
+
+@dp.message(BroadcastState.waiting_for_broadcast_message)
+async def process_broadcast(message: types.Message, state: FSMContext):
+    """Sends the received message to every user in the database."""
+    if message.text == "/cancel":
+        await state.clear()
+        return await message.answer("Broadcast cancelled.")
+
+    # 1. Get all unique users from your various tables
+    async with db.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT user_id FROM user_points
+            UNION
+            SELECT user_id FROM user_status
+        """)
+        user_ids = [r['user_id'] for r in rows]
+
+    await state.clear()
+    status_msg = await message.answer(f"🚀 Starting broadcast to {len(user_ids)} users...")
+
+    success = 0
+    failed = 0
+
+    for uid in user_ids:
+        try:
+            # This copies whatever you sent (text, image, etc.) and forwards it
+            await message.copy_to(chat_id=uid)
+            success += 1
+            # Small delay to avoid Telegram flood limits
+            await asyncio.sleep(0.05) 
+        except (TelegramForbiddenError, TelegramBadRequest):
+            failed += 1
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(e.retry_after)
+            await message.copy_to(chat_id=uid)
+            success += 1
+        except Exception:
+            failed += 1
+
+    await status_msg.edit_text(
+        f"✅ <b>Broadcast Complete!</b>\n\n"
+        f"📊 Stats:\n"
+        f"• Success: {success}\n"
+        f"• Failed/Blocked: {failed}"
+    )
+
+# --- BONUS: /cancel handler ---
+@dp.message(Command("cancel"))
+async def cmd_cancel(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Current action cancelled.", reply_markup=ReplyKeyboardRemove())
+# ==========================================
 # MODULE 9: MAIN ENTRY, RULES & STARTUP
 # ==========================================
 
@@ -741,4 +812,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot successfully stopped.")
+
 
