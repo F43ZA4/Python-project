@@ -111,8 +111,9 @@ async def setup_db():
     global db, bot_info
     db = await asyncpg.create_pool(DATABASE_URL)
     bot_info = await bot.get_me()
+    
     async with db.acquire() as conn:
-        # Initializing core tables
+        # 1. Initializing all core tables
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS confessions (
                 id SERIAL PRIMARY KEY, 
@@ -151,8 +152,6 @@ async def setup_db():
                 reaction_type VARCHAR(10), 
                 UNIQUE(comment_id, user_id)
             );
-
-            -- NEW: Dynamic Admin Table
             CREATE TABLE IF NOT EXISTS authorized_admins (
                 user_id BIGINT PRIMARY KEY, 
                 added_by BIGINT, 
@@ -160,16 +159,37 @@ async def setup_db():
             );
         """)
 
-        # --- SYNC ADMINS FROM DATABASE ---
-        # This ensures admins added via /addadmin stay active after a restart
+        # 2. Syncing Admins (This MUST be inside the 'async with' block)
         rows = await conn.fetch("SELECT user_id FROM authorized_admins")
         for r in rows:
             if r['user_id'] not in ADMIN_IDS:
                 ADMIN_IDS.append(r['user_id'])
     
-    print(f"✅ DB Ready. Admins synced: {len(ADMIN_IDS)}")
+    print(f"✅ DB Ready. Total Admins in memory: {len(ADMIN_IDS)}")
 
-# [Keep your BlockMiddleware class and registration below this]
+class BlockMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user = data.get("event_from_user")
+        if user:
+            async with db.acquire() as conn:
+                status = await conn.fetchrow(
+                    "SELECT is_blocked, blocked_until FROM user_status WHERE user_id = $1", 
+                    user.id
+                )
+                if status and status['is_blocked']:
+                    if status['blocked_until'] and datetime.now(status['blocked_until'].tzinfo) > status['blocked_until']:
+                        await conn.execute("UPDATE user_status SET is_blocked = False WHERE user_id = $1", user.id)
+                    else:
+                        if isinstance(event, types.CallbackQuery):
+                            await event.answer("🚫 You are currently blocked.", show_alert=True)
+                        else:
+                            await event.answer("🚫 You are currently blocked from using this bot.")
+                        return
+        return await handler(event, data)
+
+# Registering the middleware
+dp.message.outer_middleware(BlockMiddleware())
+dp.callback_query.outer_middleware(BlockMiddleware())
 # ==========================================
 # MODULE 5: CONFESSION SUBMISSION LOGIC
 # ==========================================
@@ -898,6 +918,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot successfully stopped.")
+
 
 
 
