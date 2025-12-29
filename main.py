@@ -36,16 +36,22 @@ MAX_CATEGORIES = 3 # Maximum categories allowed per confession
 # Load environment variables at the top level
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKENS")
-ADMIN_ID_STR = os.getenv("ADMIN_ID") # Load as string first for validation
+ADMIN_ID_STR = os.getenv("ADMIN_ID") 
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-PAGE_SIZE = int(os.getenv("PAGE_SIZE", "15"))  # Number of items per page for pagination
+PAGE_SIZE = int(os.getenv("PAGE_SIZE", "15"))
 
+# 1. You fetch the URL here
 DATABASE_URL = os.getenv("DATABASE_URL")
-# PORT  dummy HTTP server, Render sets this for Web Services
+
+# --- 2. PASTE THE NEW CODE HERE ---
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+# ----------------------------------
+
+# 3. Then the rest of your code continues
 HTTP_PORT_STR = os.getenv("PORT")
 
-
-# Validate essential environment variables before proceeding
+# Validate essential environment variables...
 if not BOT_TOKEN: raise ValueError("FATAL: BOT_TOKEN environment variable not set!")
 if not ADMIN_ID_STR: raise ValueError("FATAL: ADMIN_ID environment variable not set!")
 if not CHANNEL_ID: raise ValueError("FATAL: CHANNEL_ID environment variable not set!")
@@ -1454,4 +1460,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+
         logging.info("Bot stopped by user.")
