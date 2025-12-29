@@ -761,129 +761,47 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Current action cancelled.", reply_markup=ReplyKeyboardRemove())
 # ==========================================
-# MODULE 10: DYNAMIC ADMIN MANAGEMENT
+# MODULE 10: DYNAMIC ADMIN MANAGEMENT + DEBUG
 # ==========================================
+
+@dp.message(Command("check_me"))
+async def cmd_check_me(message: types.Message):
+    """Debug command to verify Admin IDs."""
+    user_id = message.from_user.id
+    debug_info = (
+        f"🔍 <b>DEBUG REPORT</b>\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"👤 <b>Your ID:</b> <code>{user_id}</code>\n"
+        f"👑 <b>Primary Admin:</b> <code>{PRIMARY_ADMIN}</code>\n"
+        f"👥 <b>Admin List:</b> <code>{ADMIN_IDS}</code>\n"
+        f"✅ <b>Match?:</b> {'YES' if user_id == PRIMARY_ADMIN else 'NO'}"
+    )
+    await message.answer(debug_info)
 
 @dp.message(Command("addadmin"))
 async def cmd_add_admin(message: types.Message, command: CommandObject):
-    """Only the original creator (PRIMARY_ADMIN) can add other admins."""
     if message.from_user.id != PRIMARY_ADMIN:
-        return await message.answer("❌ Only the Creator can promote others to Admin.")
+        return await message.answer("❌ Only the Creator can promote others.")
     
     if not command.args:
-        return await message.answer("Usage: <code>/addadmin 12345678</code>")
+        return await message.answer("Usage: /addadmin [user_id]")
     
     try:
-        new_admin_id = int(command.args)
+        new_id = int(command.args)
         async with db.acquire() as conn:
             await conn.execute(
                 "INSERT INTO authorized_admins (user_id, added_by) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                new_admin_id, message.from_user.id
+                new_id, message.from_user.id
             )
-            if new_admin_id not in ADMIN_IDS:
-                ADMIN_IDS.append(new_admin_id)
-        
-        await message.answer(f"✅ User <code>{new_admin_id}</code> is now an Admin.")
-        # Attempt to notify the new admin
-        try:
-            await bot.send_message(new_admin_id, "🎖 <b>You have been promoted to Admin!</b>\nYou now have access to moderation commands.")
-        except:
-            pass
+            if new_id not in ADMIN_IDS:
+                ADMIN_IDS.append(new_id)
+        await message.answer(f"✅ User {new_id} added as Admin.")
     except ValueError:
-        await message.answer("❌ Invalid User ID. Please provide a numeric ID.")
-
-@dp.message(Command("removeadmin"))
-async def cmd_remove_admin(message: types.Message, command: CommandObject):
-    """Only the original creator can demote admins."""
-    if message.from_user.id != PRIMARY_ADMIN:
-        return await message.answer("❌ Only the Creator can remove Admins.")
-    
-    try:
-        target_id = int(command.args)
-        if target_id == PRIMARY_ADMIN:
-            return await message.answer("❌ You cannot remove yourself (The Creator).")
-            
-        async with db.acquire() as conn:
-            await conn.execute("DELETE FROM authorized_admins WHERE user_id = $1", target_id)
-            if target_id in ADMIN_IDS:
-                ADMIN_IDS.remove(target_id)
-                
-        await message.answer(f"🗑 User <code>{target_id}</code> has been removed from Admins.")
-    except Exception:
-        await message.answer("Usage: <code>/removeadmin 12345678</code>")
-
-@dp.message(Command("adminlist"))
-async def cmd_admin_list(message: types.Message):
-    """Shows all current admins."""
-    if not is_admin(message.from_user.id): return
-    
-    admin_str = "<b>👥 Current Administrators:</b>\n\n"
-    for i, aid in enumerate(ADMIN_IDS, 1):
-        tag = "👑 Creator" if aid == PRIMARY_ADMIN else "🛠 Admin"
-        admin_str += f"{i}. <code>{aid}</code> ({tag})\n"
-    
-    await message.answer(admin_str)
-
-   await message.answer(admin_str)
+        await message.answer("❌ Invalid User ID.")
 
 # ==========================================
-# MODULE 9: MAIN ENTRY, RULES & STARTUP
+# MODULE 9: MAIN ENTRY & STARTUP
 # ==========================================
-
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message, command: CommandObject):
-    user_id = message.from_user.id
-    async with db.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO user_points (user_id, points) VALUES ($1, 0) ON CONFLICT DO NOTHING", 
-            user_id
-        )
-
-    if command.args and command.args.startswith("view_"):
-        try:
-            conf_id = int(command.args.split("_")[1])
-            await message.answer(f"🔎 <b>Loading comments for Confession #{conf_id}...</b>")
-            return await show_comments_for_confession(user_id, conf_id)
-        except (ValueError, IndexError):
-            pass
-
-    welcome_text = (
-        f"👋 <b>Welcome to AAU Confessions!</b>\n\n"
-        f"This is a safe, anonymous space for you to share your thoughts, stories, and secrets.\n\n"
-        f"🔹 Use /confess to post anonymously.\n"
-        f"🔹 Use /hot to see trending posts.\n"
-        f"🔹 Use /profile to check your Aura points.\n\n"
-        f"<i>Please read the /rules before participating.</i>"
-    )
-    await message.answer(welcome_text)
-
-@dp.message(Command("rules"))
-async def cmd_rules(message: types.Message):
-    rules_text = (
-        "📜 <b>Bot Rules & Guidelines</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "1️⃣ <b>Be Respectful:</b> No hate speech, bullying, or harassment.\n"
-        "2️⃣ <b>Privacy:</b> No real names or private info.\n"
-        "3️⃣ <b>No Spam:</b> No links to other channels or scams.\n"
-        "4️⃣ <b>Aura System:</b> Bad behavior results in Aura loss.\n\n"
-        "<i>By clicking below, you agree to follow these rules.</i>"
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ I Accept the Rules", callback_data="accept_rules")
-    ]])
-    await message.answer(rules_text, reply_markup=kb)
-
-@dp.callback_query(F.data == "accept_rules")
-async def handle_rules_acceptance(cb: types.CallbackQuery):
-    async with db.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO user_status (user_id, has_accepted_rules) 
-            VALUES ($1, True) 
-            ON CONFLICT (user_id) DO UPDATE SET has_accepted_rules = True
-        """, cb.from_user.id)
-    
-    await cb.message.edit_text("✅ <b>Rules Accepted!</b>\nYou can now use /confess to share your first post.")
-    await cb.answer()
 
 async def handle_health_check(request):
     return web.Response(text="Bot is online.", status=200)
@@ -891,20 +809,17 @@ async def handle_health_check(request):
 async def main():
     await setup_db()
     
-    # Updated Menu (Fixed commas)
+    # Clean list: No duplicates, correct commas, one set of brackets
     await bot.set_my_commands([
         types.BotCommand(command="start", description="Main menu"),
         types.BotCommand(command="confess", description="Post a confession"),
         types.BotCommand(command="hot", description="Trending posts"),
         types.BotCommand(command="profile", description="Check your Aura"),
         types.BotCommand(command="rules", description="Read rules"),
-        types.BotCommand(command="notify", description="ADMIN: Broadcast message"),
+        types.BotCommand(command="check_me", description="DEBUG: Check Admin Status"),
+        types.BotCommand(command="addadmin", description="CREATOR: Add admin"),
         types.BotCommand(command="adminlist", description="ADMIN: View staff"),
         types.BotCommand(command="cancel", description="Cancel current action")
-        types.BotCommand(command="start", description="Start bot"),
-        types.BotCommand(command="addadmin", description="Add an admin"), # Make sure this is here!
-    # ... other commands
-])
     ])
 
     app = web.Application()
@@ -914,21 +829,8 @@ async def main():
     
     port = int(os.getenv("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
-    asyncio.create_task(site.start())
+    await site.start()
 
-    logging.info(f"Bot starting on Port {port}...")
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Bot stopped.")
-    port = int(os.getenv("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    asyncio.create_task(site.start())
-
-    # 4. Start Bot Polling
     logging.info(f"Bot starting on Port {port}...")
     await dp.start_polling(bot)
 
