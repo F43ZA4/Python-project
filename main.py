@@ -202,7 +202,7 @@ async def cmd_rules(message: types.Message):
     )
     await message.answer(rules_text)
 # ==========================================
-# MODULE 4: CONFESSION SUBMISSION (USER)
+# MODULE 4: CONFESSION SUBMISSION (STABLE)
 # ==========================================
 
 @dp.message(Command("confess"))
@@ -238,12 +238,15 @@ async def process_category_toggle(cb: types.CallbackQuery, state: FSMContext):
         await cb.answer(f"Added {cat}")
 
     await state.update_data(chosen_cats=chosen)
-    # Optional: Update message text to show current selection
     cats_str = ", ".join(chosen) if chosen else "None"
-    await cb.message.edit_text(
-        f"<b>Step 1: Choose Categories</b>\nSelected: <i>{cats_str}</i>\n\nSelect up to 3 categories:",
-        reply_markup=cb.message.reply_markup
-    )
+    
+    try:
+        await cb.message.edit_text(
+            f"<b>Step 1: Choose Categories</b>\nSelected: <i>{cats_str}</i>\n\nSelect up to 3 categories:",
+            reply_markup=cb.message.reply_markup
+        )
+    except:
+        pass # Ignore if text hasn't changed
 
 @dp.callback_query(F.data == "cats_complete", ConfessionForm.selecting_categories)
 async def categories_done(cb: types.CallbackQuery, state: FSMContext):
@@ -254,21 +257,16 @@ async def categories_done(cb: types.CallbackQuery, state: FSMContext):
     await state.set_state(ConfessionForm.waiting_for_text)
     await cb.message.edit_text(
         "<b>Step 2: Write your confession</b>\n"
-        "Please type your confession below. Be honest and follow the rules.\n\n"
-        "<i>Minimum 10 characters. Your identity remains anonymous.</i>"
+        "Please type your confession below. (Min 10 characters)"
     )
 
 @dp.message(ConfessionForm.waiting_for_text)
 async def handle_confession_text(message: types.Message, state: FSMContext):
     if not message.text or len(message.text) < 10:
-        return await message.answer("❌ Your confession is too short. Please add more detail.")
-
-    # Basic word filter
-    if any(word in message.text.lower() for word in BANNED_WORDS):
-        return await message.answer("⚠️ Your confession contains forbidden links or words. Please edit and try again.")
+        return await message.answer("❌ Your confession is too short.")
 
     data = await state.get_data()
-    chosen_cats = data.get("chosen_cats")
+    chosen_cats = data.get("chosen_cats", ["General"])
     
     async with db.acquire() as conn:
         conf_id = await conn.fetchval(
@@ -277,20 +275,27 @@ async def handle_confession_text(message: types.Message, state: FSMContext):
         )
 
     await state.clear()
-    await message.answer(f"✅ <b>Success!</b>\nYour confession #{conf_id} has been sent to the admins for review.")
+    await message.answer(f"✅ <b>Success!</b>\nYour confession #{conf_id} is now with admins.")
 
-    # Notify Primary Admin
-    admin_kb = InlineKeyboardBuilder()
-    admin_kb.button(text="✅ Approve", callback_data=f"adm_app_{conf_id}")
-    admin_kb.button(text="❌ Reject", callback_data=f"adm_rej_{conf_id}")
+    # Prepare Admin UI
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Approve", callback_data=f"adm_app_{conf_id}")
+    builder.button(text="❌ Reject", callback_data=f"adm_rej_{conf_id}")
     
-    await bot.send_message(
-        PRIMARY_ADMIN,
+    report_text = (
         f"🆕 <b>New Submission #{conf_id}</b>\n"
         f"📂 Categories: {', '.join(chosen_cats)}\n\n"
-        f"{html.quote(message.text)}",
-        reply_markup=admin_kb.as_markup()
+        f"{html.quote(message.text)}"
     )
+
+    # LOOP: Send to every admin in the list
+    print(f"DEBUG: Starting notification loop for {len(ADMIN_IDS)} admins.")
+    for admin in ADMIN_IDS:
+        try:
+            await bot.send_message(admin, report_text, reply_markup=builder.as_markup())
+            print(f"DEBUG: Successfully sent to admin {admin}")
+        except Exception as e:
+            print(f"DEBUG: Failed to send to admin {admin}. Error: {e}")
 # ==========================================
 # MODULE 5: ADMIN MODERATION & POSTING
 # ==========================================
@@ -689,4 +694,5 @@ if __name__ == "__main__":
     asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot stopped.")
+
 
