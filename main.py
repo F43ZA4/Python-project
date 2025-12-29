@@ -43,6 +43,35 @@ PAGE_SIZE = int(os.getenv("PAGE_SIZE", "15"))
 # 1. You fetch the URL here
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# --- DATABASE FIX FOR RENDER/SUPABASE ---
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+async def create_db_pool():
+    global db
+    try:
+        logging.info("Attempting to connect to Database...")
+        # We add a 10s timeout so the bot doesn't hang at "Running main.py"
+        db = await asyncio.wait_for(
+            asyncpg.create_pool(
+                dsn=DATABASE_URL,
+                min_size=1,
+                max_size=10,
+                command_timeout=60,
+                # Essential for Supabase Port 6543
+                statement_cache_size=0 
+            ),
+            timeout=10.0
+        )
+        logging.info("Database pool created successfully.")
+        return db
+    except asyncio.TimeoutError:
+        logging.critical("FATAL: Database connection timed out. Check your Supabase URL!")
+        raise
+    except Exception as e:
+        logging.error(f"Failed to create database pool: {e}")
+        raise
+
 # --- 2. PASTE THE NEW CODE HERE ---
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -1422,7 +1451,7 @@ async def main():
         dp.message.middleware(BlockUserMiddleware())
         dp.callback_query.middleware(BlockUserMiddleware())
 
-        # 3. Setup Commands
+        # 3. Setup Commands (Standard and Admin)
         commands = [
             types.BotCommand(command="start", description="Start/View confession"),
             types.BotCommand(command="confess", description="Submit anonymous confession"),
@@ -1442,14 +1471,15 @@ async def main():
         await bot.set_my_commands(commands)
         await bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(chat_id=ADMIN_ID))
 
-        # 4. Start Dummy Server in the background
+        # 4. Start Dummy Server in the background (Non-blocking)
         if HTTP_PORT_STR:
             asyncio.create_task(start_dummy_server())
-            logging.info(f"Dummy HTTP server started on port {HTTP_PORT_STR}")
+            logging.info(f"Health check server running on port {HTTP_PORT_STR}")
         
-        # 5. Start Polling (Wait for this specifically)
+        # 5. Start Polling
         logging.info("Bot is now polling...")
-        await dp.start_polling(bot) # Note: skip_updates is removed
+        # No skip_updates=True so we don't lose messages during deployment
+        await dp.start_polling(bot)
 
     except Exception as e:
         logging.critical(f"Fatal error during main execution: {e}", exc_info=True)
@@ -1460,3 +1490,10 @@ async def main():
         if db:
             await db.close()
         logging.info("Bot stopped.")
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("Bot stopped by user.")
+
