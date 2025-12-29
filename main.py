@@ -34,42 +34,35 @@ POINTS_PER_DISLIKE_RECEIVED = -3
 MAX_CATEGORIES = 3 # Maximum categories allowed per confession
 
 # Load environment variables at the top level
+# Load environment variables
 load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKENS")
+BOT_TOKEN = os.getenv("BOT_TOKENS")  # Note the 'S'
 ADMIN_ID_STR = os.getenv("ADMIN_ID") 
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-PAGE_SIZE = int(os.getenv("PAGE_SIZE", "15"))
-
-# 1. You fetch the URL here
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# --- DATABASE FIX FOR RENDER/SUPABASE ---
+# --- DATABASE FIX FOR KOYEB/SUPABASE ---
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 async def create_db_pool():
     global db
     try:
-        logging.info("Attempting to connect to Database...")
-        # We add a 10s timeout so the bot doesn't hang at "Running main.py"
+        logging.info("Connecting to Supabase...")
         db = await asyncio.wait_for(
             asyncpg.create_pool(
                 dsn=DATABASE_URL,
                 min_size=1,
                 max_size=10,
                 command_timeout=60,
-                # Essential for Supabase Port 6543
-                statement_cache_size=0 
+                statement_cache_size=0  # CRITICAL for port 6543
             ),
-            timeout=10.0
+            timeout=15.0
         )
-        logging.info("Database pool created successfully.")
+        logging.info("Database pool ready.")
         return db
-    except asyncio.TimeoutError:
-        logging.critical("FATAL: Database connection timed out. Check your Supabase URL!")
-        raise
     except Exception as e:
-        logging.error(f"Failed to create database pool: {e}")
+        logging.critical(f"Database Connection Failed: {e}")
         raise
 
 # --- 2. PASTE THE NEW CODE HERE ---
@@ -1496,4 +1489,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("Bot stopped by user.")
+
 
