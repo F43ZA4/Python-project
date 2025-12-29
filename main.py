@@ -798,6 +798,17 @@ async def cmd_add_admin(message: types.Message, command: CommandObject):
         await message.answer(f"✅ User {new_id} added as Admin.")
     except ValueError:
         await message.answer("❌ Invalid User ID.")
+# ... (End of Module 10: addadmin and check_me) ...
+
+# ==========================================
+# INSERT THE CODE HERE (Right before Module 9)
+# ==========================================
+
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    # This is where you put your new welcome message
+    welcome_text = "👋 Hello! Welcome to the bot."
+    await message.answer(welcome_text)
 
 # ==========================================
 # MODULE 9: MAIN ENTRY & STARTUP
@@ -839,3 +850,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot successfully stopped.")
+
