@@ -824,6 +824,8 @@ async def cmd_admin_list(message: types.Message):
     
     await message.answer(admin_str)
 
+   await message.answer(admin_str)
+
 # ==========================================
 # MODULE 9: MAIN ENTRY, RULES & STARTUP
 # ==========================================
@@ -935,11 +937,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot successfully stopped.")
-
-
-
-
-
-
-
-
