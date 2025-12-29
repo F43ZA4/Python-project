@@ -61,21 +61,34 @@ BANNED_WORDS = ["scam", "nude", "hack", "t.me/", "telegram.me"]
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID_STR = os.getenv("ADMIN_ID")
+ADMIN_ID_STR = os.getenv("ADMIN_ID", "")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 DATABASE_URL = os.getenv("DATABASE_URL")
-HTTP_PORT_STR = os.getenv("PORT")
+HTTP_PORT_STR = os.getenv("PORT", "8080")
 
 if not BOT_TOKEN or not ADMIN_ID_STR or not CHANNEL_ID or not DATABASE_URL:
     raise ValueError("FATAL: Missing Environment Variables!")
 
-ADMIN_ID = int(ADMIN_ID_STR)
+# --- MULTI-ADMIN COMPATIBILITY FIX ---
+# 1. Convert the string to a list of numbers
+ADMIN_IDS = [int(i.strip()) for i in ADMIN_ID_STR.split(",") if i.strip()]
+
+# 2. Define PRIMARY_ADMIN (the first ID in your list)
+PRIMARY_ADMIN = ADMIN_IDS[0] if ADMIN_IDS else None
+
+# 3. Keep ADMIN_ID for old modules that might still use it
+ADMIN_ID = PRIMARY_ADMIN 
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 db = None
 bot_info = None
+
+# Helper function needed by Module 10
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 # ==========================================
 # MODULE 2: REPUTATION & AURA TITLES
@@ -918,6 +931,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot successfully stopped.")
+
 
 
 
