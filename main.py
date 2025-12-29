@@ -77,69 +77,28 @@ async def safe_send_message(user_id: int, text: str, reply_markup=None):
         logging.error(f"Failed to send message to {user_id}: {e}")
         return None
 # ==========================================
-# MODULE 2: DATABASE & SECURITY MIDDLEWARE
+# MODULE 2: REFINED CONFIG & ID CLEANER
 # ==========================================
+import os
 
-async def setup_db():
-    global db, bot_info
-    db = await asyncpg.create_pool(DATABASE_URL)
-    bot_info = await bot.get_me()
-    async with db.acquire() as conn:
-        # Create tables if they don't exist
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS confessions (
-                id SERIAL PRIMARY KEY, 
-                text TEXT, 
-                user_id BIGINT, 
-                status TEXT DEFAULT 'pending', 
-                message_id BIGINT, 
-                categories TEXT[], 
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, 
-                rejection_reason TEXT
-            );
-            CREATE TABLE IF NOT EXISTS comments (
-                id SERIAL PRIMARY KEY, 
-                confession_id INTEGER REFERENCES confessions(id) ON DELETE CASCADE, 
-                user_id BIGINT, 
-                text TEXT, 
-                parent_comment_id INTEGER, 
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS user_status (
-                user_id BIGINT PRIMARY KEY, 
-                is_blocked BOOLEAN DEFAULT FALSE, 
-                blocked_until TIMESTAMP WITH TIME ZONE, 
-                block_reason TEXT
-            );
-            CREATE TABLE IF NOT EXISTS user_points (
-                user_id BIGINT PRIMARY KEY, 
-                points INTEGER DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS reactions (
-                id SERIAL PRIMARY KEY, 
-                comment_id INTEGER REFERENCES comments(id) ON DELETE CASCADE, 
-                user_id BIGINT, 
-                reaction_type VARCHAR(10), 
-                UNIQUE(comment_id, user_id)
-            );
-        """)
+# Get the raw string from Render: e.g., "12345, 67890"
+RAW_ADMINS = os.getenv("ADMIN_ID", "")
 
-class BlockMiddleware(BaseMiddleware):
-    async def __call__(self, handler, event, data):
-        user = data.get("event_from_user")
-        if user:
-            async with db.acquire() as conn:
-                status = await conn.fetchrow("SELECT is_blocked, blocked_until FROM user_status WHERE user_id = $1", user.id)
-                if status and status['is_blocked']:
-                    # Check if temporary block has expired
-                    if status['blocked_until'] and datetime.now(status['blocked_until'].tzinfo) > status['blocked_until']:
-                        await conn.execute("UPDATE user_status SET is_blocked = False WHERE user_id = $1", user.id)
-                    else:
-                        return # Ignore messages from blocked users
-        return await handler(event, data)
+# This cleans the string, removes spaces, and makes a list of Integers
+ADMIN_IDS = []
+for item in RAW_ADMINS.split(","):
+    item = item.strip()
+    if item.lstrip('-').isdigit(): # Support for -IDs (Groups)
+        ADMIN_IDS.append(int(item))
 
-# Register the middleware
-dp.message.outer_middleware(BlockMiddleware())
+# Log the result so you can see it in Render Logs
+print(f"✅ SYSTEM: Loaded {len(ADMIN_IDS)} admins: {ADMIN_IDS}")
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
+# If no list exists, primary admin is 0 to avoid errors
+PRIMARY_ADMIN = ADMIN_IDS[0] if ADMIN_IDS else 0
 # ==========================================
 # MODULE 3: FSM STATES & START LOGIC
 # ==========================================
@@ -201,101 +160,78 @@ async def cmd_rules(message: types.Message):
         "<i>Violations will result in Aura loss or a permanent ban.</i>"
     )
     await message.answer(rules_text)
+
 # ==========================================
-# MODULE 4: CONFESSION SUBMISSION (STABLE)
+# MODULE 4: CONFESSION SUBMISSION (USER)
 # ==========================================
 
 @dp.message(Command("confess"))
 async def start_confess(message: types.Message, state: FSMContext):
-    """Starts the multi-step confession process."""
     builder = InlineKeyboardBuilder()
     for cat in CATEGORIES:
         builder.button(text=cat, callback_data=f"sel_cat_{cat}")
     builder.button(text="✅ Done Selecting", callback_data="cats_complete")
     builder.adjust(2)
-    
     await state.set_state(ConfessionForm.selecting_categories)
     await state.update_data(chosen_cats=[])
-    
-    await message.answer(
-        "<b>Step 1: Choose Categories</b>\nSelect up to 3 categories that fit your confession:",
-        reply_markup=builder.as_markup()
-    )
+    await message.answer("<b>Step 1: Choose Categories</b>", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("sel_cat_"), ConfessionForm.selecting_categories)
 async def process_category_toggle(cb: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     chosen = data.get("chosen_cats", [])
     cat = cb.data.split("_")[2]
-
-    if cat in chosen:
-        chosen.remove(cat)
-        await cb.answer(f"Removed {cat}")
-    else:
-        if len(chosen) >= MAX_CATEGORIES:
-            return await cb.answer(f"You can only pick {MAX_CATEGORIES} categories!", show_alert=True)
-        chosen.append(cat)
-        await cb.answer(f"Added {cat}")
-
+    if cat in chosen: chosen.remove(cat)
+    else: chosen.append(cat)
     await state.update_data(chosen_cats=chosen)
-    cats_str = ", ".join(chosen) if chosen else "None"
-    
-    try:
-        await cb.message.edit_text(
-            f"<b>Step 1: Choose Categories</b>\nSelected: <i>{cats_str}</i>\n\nSelect up to 3 categories:",
-            reply_markup=cb.message.reply_markup
-        )
-    except:
-        pass # Ignore if text hasn't changed
+    await cb.message.edit_text(f"Selected: {', '.join(chosen)}\nPick up to 3:", reply_markup=cb.message.reply_markup)
 
 @dp.callback_query(F.data == "cats_complete", ConfessionForm.selecting_categories)
 async def categories_done(cb: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    if not data.get("chosen_cats"):
-        return await cb.answer("Please select at least one category!", show_alert=True)
-    
     await state.set_state(ConfessionForm.waiting_for_text)
-    await cb.message.edit_text(
-        "<b>Step 2: Write your confession</b>\n"
-        "Please type your confession below. (Min 10 characters)"
-    )
+    await cb.message.edit_text("<b>Step 2: Write your confession</b>")
 
 @dp.message(ConfessionForm.waiting_for_text)
 async def handle_confession_text(message: types.Message, state: FSMContext):
-    if not message.text or len(message.text) < 10:
-        return await message.answer("❌ Your confession is too short.")
+    if len(message.text) < 10:
+        return await message.answer("❌ Too short!")
 
     data = await state.get_data()
-    chosen_cats = data.get("chosen_cats", ["General"])
+    cats = data.get("chosen_cats", ["General"])
     
     async with db.acquire() as conn:
         conf_id = await conn.fetchval(
             "INSERT INTO confessions (text, user_id, categories, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
-            message.text, message.from_user.id, chosen_cats
+            message.text, message.from_user.id, cats
         )
 
     await state.clear()
-    await message.answer(f"✅ <b>Success!</b>\nYour confession #{conf_id} is now with admins.")
-
-    # Prepare Admin UI
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Approve", callback_data=f"adm_app_{conf_id}")
-    builder.button(text="❌ Reject", callback_data=f"adm_rej_{conf_id}")
     
-    report_text = (
-        f"🆕 <b>New Submission #{conf_id}</b>\n"
-        f"📂 Categories: {', '.join(chosen_cats)}\n\n"
-        f"{html.quote(message.text)}"
-    )
+    # Check if there are admins to notify
+    if not ADMIN_IDS:
+        await message.answer("⚠️ Bot Error: No admins are configured. Contact the owner.")
+        print("CRITICAL: ADMIN_ID environment variable is empty!")
+        return
 
-    # LOOP: Send to every admin in the list
-    print(f"DEBUG: Starting notification loop for {len(ADMIN_IDS)} admins.")
-    for admin in ADMIN_IDS:
+    await message.answer(f"✅ Confession #{conf_id} sent for approval!")
+
+    # ADMIN NOTIFICATION LOOP
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Approve", callback_data=f"adm_app_{conf_id}")
+    kb.button(text="❌ Reject", callback_data=f"adm_rej_{conf_id}")
+    
+    text = f"🆕 <b>New Submission #{conf_id}</b>\n\n{html.quote(message.text)}"
+
+    success_count = 0
+    for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin, report_text, reply_markup=builder.as_markup())
-            print(f"DEBUG: Successfully sent to admin {admin}")
+            await bot.send_message(admin_id, text, reply_markup=kb.as_markup())
+            success_count += 1
         except Exception as e:
-            print(f"DEBUG: Failed to send to admin {admin}. Error: {e}")
+            print(f"❌ Failed to notify admin {admin_id}: {e}")
+
+    if success_count == 0:
+        await message.answer("❗ <b>Alert:</b> No admins could be reached. Make sure admins have started the bot!")
 # ==========================================
 # MODULE 5: ADMIN MODERATION & POSTING
 # ==========================================
@@ -470,7 +406,7 @@ async def handle_reactions(cb: types.CallbackQuery):
 
     await cb.answer(f"You {'liked' if r_type == 'like' else 'disliked'} this comment!")
 # ==========================================
-# MODULE 7: TRENDING, PROFILE & ADMIN MGMT
+# MODULE 7: TRENDING, PROFILE & DEBUG
 # ==========================================
 
 @dp.message(Command("hot"))
@@ -490,11 +426,9 @@ async def show_trending(message: types.Message):
     if not hot_posts:
         return await message.answer("🔥 No hot topics yet. Start a discussion!")
 
-    text = "<b>🔥 Trending Discussions (Last 7 Days)</b>\n\n"
+    text = "<b>🔥 Trending Discussions</b>\n\n"
     for row in hot_posts:
-        preview = html.quote(row['text'][:60]) + "..."
-        text += f"<b>#{row['id']}</b> ({row['comment_count']} 💬)\n{preview}\n/start view_{row['id']}\n\n"
-    
+        text += f"<b>#{row['id']}</b> ({row['comment_count']} 💬)\n/start view_{row['id']}\n\n"
     await message.answer(text)
 
 @dp.message(Command("profile"))
@@ -502,43 +436,30 @@ async def cmd_profile(message: types.Message):
     user_id = message.from_user.id
     async with db.acquire() as conn:
         points = await conn.fetchval("SELECT points FROM user_points WHERE user_id = $1", user_id) or 0
-        conf_count = await conn.fetchval("SELECT COUNT(*) FROM confessions WHERE user_id = $1 AND status = 'approved'", user_id)
-    
-    title = get_reputation_title(points)
-    await message.answer(
-        f"👤 <b>Your MWU Profile</b>\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"🏅 <b>Aura Points:</b> {points}\n"
-        f"🏷️ <b>Title:</b> {title}\n"
-        f"✉️ <b>Approved Confessions:</b> {conf_count}\n\n"
-        f"<i>Tip: Be helpful in comments to gain more Aura!</i>"
-    )
+    await message.answer(f"👤 <b>Your Profile</b>\n\n🏅 <b>Aura Points:</b> {points}")
 
-@dp.message(Command("addadmin"))
-async def cmd_add_admin(message: types.Message, command: CommandObject):
-    """Allows the Primary Admin to promote others."""
-    if message.from_user.id != PRIMARY_ADMIN:
-        return await message.answer("❌ Only the Bot Creator can promote admins.")
-    
-    if not command.args:
-        return await message.answer("Usage: /addadmin [user_id]")
-    
-    try:
-        new_id = int(command.args)
-        if new_id not in ADMIN_IDS:
-            ADMIN_IDS.append(new_id)
-            await message.answer(f"✅ User {new_id} added to the active Admin list.")
-        else:
-            await message.answer("User is already an admin.")
-    except ValueError:
-        await message.answer("❌ Invalid User ID.")
+# --- ADDED DEBUG COMMAND HERE ---
 
-@dp.message(Command("check_me"))
-async def cmd_check_me(message: types.Message):
-    """Debug command to check current user ID and admin status."""
-    user_id = message.from_user.id
-    status = "Admin ✅" if is_admin(user_id) else "User 👤"
-    await message.answer(f"🔍 <b>Debug Info:</b>\nYour ID: <code>{user_id}</code>\nStatus: {status}")
+@dp.message(Command("test_admin"))
+async def cmd_test_admin(message: types.Message):
+    """Checks if YOU are in the admin list and if the bot can reach you."""
+    uid = message.from_user.id
+    
+    # We use the is_admin function from Module 2
+    if is_admin(uid):
+        await message.answer(f"✅ <b>Status: SUCCESS</b>\nYour ID (<code>{uid}</code>) is recognized as an Admin.")
+        try:
+            await bot.send_message(uid, "🔔 <b>Test Notification:</b> If you see this, the approval system will work!")
+        except Exception as e:
+            await message.answer(f"❌ <b>Error:</b> I recognize you, but I cannot message you. Have you blocked the bot?\nError: {e}")
+    else:
+        # This part helps you see exactly what the bot has in its memory
+        await message.answer(
+            f"❌ <b>Status: NOT RECOGNIZED</b>\n\n"
+            f"Your ID: <code>{uid}</code>\n"
+            f"IDs in Bot Memory: <code>{ADMIN_IDS}</code>\n\n"
+            f"<b>To fix this:</b> Copy your ID above and paste it into the ADMIN_ID variable on Render."
+        )
 # ==========================================
 # MODULE 8: MODERATION TOOLS & BROADCASTS
 # ==========================================
@@ -694,5 +615,6 @@ if __name__ == "__main__":
     asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot stopped.")
+
 
 
