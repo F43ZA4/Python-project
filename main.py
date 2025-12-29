@@ -1415,10 +1415,14 @@ async def main():
             logging.critical("FATAL: Database or bot info missing after setup. Cannot start.")
             return
 
-        # --- NEW: Register middleware ---
+        # 1. Clear Webhooks (Fixes the "Conflict" error automatically)
+        await bot.delete_webhook(drop_pending_updates=True)
+
+        # 2. Register middleware
         dp.message.middleware(BlockUserMiddleware())
         dp.callback_query.middleware(BlockUserMiddleware())
 
+        # 3. Setup Commands
         commands = [
             types.BotCommand(command="start", description="Start/View confession"),
             types.BotCommand(command="confess", description="Submit anonymous confession"),
@@ -1438,27 +1442,21 @@ async def main():
         await bot.set_my_commands(commands)
         await bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(chat_id=ADMIN_ID))
 
-        tasks = [asyncio.create_task(dp.start_polling(bot, skip_updates=True))]
+        # 4. Start Dummy Server in the background
         if HTTP_PORT_STR:
-            tasks.append(asyncio.create_task(start_dummy_server()))
+            asyncio.create_task(start_dummy_server())
+            logging.info(f"Dummy HTTP server started on port {HTTP_PORT_STR}")
         
-        logging.info("Starting bot...")
-        await asyncio.gather(*tasks)
+        # 5. Start Polling (Wait for this specifically)
+        logging.info("Bot is now polling...")
+        await dp.start_polling(bot) # Note: skip_updates is removed
 
     except Exception as e:
         logging.critical(f"Fatal error during main execution: {e}", exc_info=True)
     finally:
         logging.info("Shutting down...")
-        # *** FIX: Correctly close the bot session on shutdown ***
         if bot and bot.session:
             await bot.session.close()
         if db:
             await db.close()
         logging.info("Bot stopped.")
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-
-        logging.info("Bot stopped by user.")
