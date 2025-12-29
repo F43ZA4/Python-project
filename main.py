@@ -899,6 +899,10 @@ async def main():
         types.BotCommand(command="notify", description="ADMIN: Broadcast message"),
         types.BotCommand(command="adminlist", description="ADMIN: View staff"),
         types.BotCommand(command="cancel", description="Cancel current action")
+        types.BotCommand(command="start", description="Start bot"),
+        types.BotCommand(command="addadmin", description="Add an admin"), # Make sure this is here!
+    # ... other commands
+])
     ])
 
     app = web.Application()
@@ -931,6 +935,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot successfully stopped.")
+
 
 
 
