@@ -627,54 +627,66 @@ async def process_broadcast(message: types.Message, state: FSMContext):
 
     await status_msg.edit_text(f"✅ <b>Broadcast Complete</b>\n\nSuccess: {success}\nFailed: {failed}")
 # ==========================================
-# MODULE 9: SERVER & MAIN ENTRY POINT
+# ==========================================
+# MODULE 9: SERVER & MAIN ENTRY POINT (FIXED MENU)
 # ==========================================
 
 async def handle_health_check(request):
-    """Answers Render's health checks to keep the bot active."""
     return web.Response(text="MWU CONFESSION Bot is running!", status=200)
 
-async def on_startup():
-    """Tasks to run when the bot starts."""
-    await setup_db()
+async def set_bot_commands():
+    """Sets different menus for Admins and Regular Users."""
     
-    # Set the blue Menu button in Telegram
-    await bot.set_my_commands([
+    # 1. Commands for EVERYONE
+    user_commands = [
         types.BotCommand(command="start", description="Main Menu"),
         types.BotCommand(command="confess", description="Submit a Secret"),
         types.BotCommand(command="hot", description="Trending Posts"),
         types.BotCommand(command="profile", description="Your Stats"),
-        types.BotCommand(command="rules", description="Read Rules"),
-        types.BotCommand(command="check_me", description="My ID & Status")
-    ])
+        types.BotCommand(command="rules", description="Read Rules")
+    ]
+    await bot.set_my_commands(user_commands, scope=types.BotCommandScopeDefault())
+
+    # 2. Commands for ADMINS ONLY
+    admin_commands = user_commands + [
+        types.BotCommand(command="notify", description="Admin: Broadcast"),
+        types.BotCommand(command="check_me", description="Admin: My Status"),
+        types.BotCommand(command="addadmin", description="Admin: Promote User")
+    ]
     
-    logging.info("--- MWU CONFESSION BOT IS ONLINE ---")
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.set_my_commands(
+                admin_commands, 
+                scope=types.BotCommandScopeChat(chat_id=admin_id)
+            )
+        except Exception:
+            # Skip if the admin hasn't started the bot yet
+            continue
 
 async def main():
-    # 1. Run Startup Tasks
-    await on_startup()
+    await setup_db()
+    
+    # Update the menus
+    await set_bot_commands()
 
-    # 2. Setup Web Server for Render
     app = web.Application()
     app.router.add_get("/", handle_health_check)
     runner = web.AppRunner(app)
     await runner.setup()
     
-    # Get Port from Render environment
     port = int(os.getenv("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-    # 3. Start Long Polling
     try:
-        # Skip updates that happened while the bot was offline
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
+    asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot stopped.")
+
