@@ -69,14 +69,14 @@ HTTP_PORT_STR = os.getenv("PORT", "8080")
 if not BOT_TOKEN or not ADMIN_ID_STR or not CHANNEL_ID or not DATABASE_URL:
     raise ValueError("FATAL: Missing Environment Variables!")
 
-# --- MULTI-ADMIN COMPATIBILITY FIX ---
-# 1. Convert the string to a list of numbers
+# --- MULTI-ADMIN CONFIGURATION ---
+# This converts "123,456" into a list [123, 456]
 ADMIN_IDS = [int(i.strip()) for i in ADMIN_ID_STR.split(",") if i.strip()]
 
-# 2. Define PRIMARY_ADMIN (the first ID in your list)
+# Defines the 'Super Admin' (the first ID in your Render list)
 PRIMARY_ADMIN = ADMIN_IDS[0] if ADMIN_IDS else None
 
-# 3. Keep ADMIN_ID for old modules that might still use it
+# Keep this for any older modules still using the singular variable
 ADMIN_ID = PRIMARY_ADMIN 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -86,10 +86,10 @@ dp = Dispatcher(storage=MemoryStorage())
 db = None
 bot_info = None
 
-# Helper function needed by Module 10
+# Helper function required by Module 10
 def is_admin(user_id: int) -> bool:
+    """Check if a user is in the authorized admin list."""
     return user_id in ADMIN_IDS
-
 # ==========================================
 # MODULE 2: REPUTATION & AURA TITLES
 # ==========================================
@@ -931,6 +931,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot successfully stopped.")
+
 
 
 
