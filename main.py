@@ -252,27 +252,17 @@ async def handle_health_check(request):
     return web.Response(text="OK")
 
 async def start_dummy_server():
-    """Starts a minimal HTTP server to respond to Render health checks."""
-    if not HTTP_PORT_STR:
-        logging.info("PORT environment variable not set. Dummy HTTP server will not start.")
-        return
-
-    try: port = int(HTTP_PORT_STR)
-    except ValueError:
-        logging.error(f"Invalid PORT environment variable: {HTTP_PORT_STR}. Dummy HTTP server will not start.")
-        return
-
+    """Tells Koyeb 'I am alive' so it doesn't restart the bot."""
     app = web.Application()
-    app.router.add_get('/', handle_health_check)
-    app.router.add_get('/healthz', handle_health_check)
+    app.router.add_get("/", lambda r: web.Response(text="Bot is online!"))
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    try:
-        await site.start()
-        logging.info(f"Dummy HTTP server started successfully on port {port}.")
-        while True:
-            await asyncio.sleep(3600)
+    # Koyeb assigns a port automatically; 8080 is the default.
+    port = int(os.getenv("PORT", "8080"))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    while True:
+        await asyncio.sleep(3600)
     except asyncio.CancelledError:
         logging.info("Dummy HTTP server task cancelled.")
     except Exception as e:
@@ -1489,5 +1479,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("Bot stopped by user.")
+
 
 
