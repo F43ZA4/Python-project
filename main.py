@@ -34,46 +34,18 @@ POINTS_PER_DISLIKE_RECEIVED = -3
 MAX_CATEGORIES = 3 # Maximum categories allowed per confession
 
 # Load environment variables at the top level
-# Load environment variables
 load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKENS")  # Note the 'S'
-ADMIN_ID_STR = os.getenv("ADMIN_ID") 
+BOT_TOKEN = os.getenv("BOT_TOKENS")
+ADMIN_ID_STR = os.getenv("ADMIN_ID") # Load as string first for validation
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+PAGE_SIZE = int(os.getenv("PAGE_SIZE", "15"))  # Number of items per page for pagination
+
 DATABASE_URL = os.getenv("DATABASE_URL")
-
-# --- DATABASE FIX FOR KOYEB/SUPABASE ---
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-async def create_db_pool():
-    global db
-    try:
-        logging.info("Connecting to Supabase...")
-        db = await asyncio.wait_for(
-            asyncpg.create_pool(
-                dsn=DATABASE_URL,
-                min_size=1,
-                max_size=10,
-                command_timeout=60,
-                statement_cache_size=0  # CRITICAL for port 6543
-            ),
-            timeout=15.0
-        )
-        logging.info("Database pool ready.")
-        return db
-    except Exception as e:
-        logging.critical(f"Database Connection Failed: {e}")
-        raise
-
-# --- 2. PASTE THE NEW CODE HERE ---
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-# ----------------------------------
-
-# 3. Then the rest of your code continues
+# PORT  dummy HTTP server, Render sets this for Web Services
 HTTP_PORT_STR = os.getenv("PORT")
 
-# Validate essential environment variables...
+
+# Validate essential environment variables before proceeding
 if not BOT_TOKEN: raise ValueError("FATAL: BOT_TOKEN environment variable not set!")
 if not ADMIN_ID_STR: raise ValueError("FATAL: ADMIN_ID environment variable not set!")
 if not CHANNEL_ID: raise ValueError("FATAL: CHANNEL_ID environment variable not set!")
@@ -252,17 +224,27 @@ async def handle_health_check(request):
     return web.Response(text="OK")
 
 async def start_dummy_server():
-    """Tells Koyeb 'I am alive' so it doesn't restart the bot."""
+    """Starts a minimal HTTP server to respond to Render health checks."""
+    if not HTTP_PORT_STR:
+        logging.info("PORT environment variable not set. Dummy HTTP server will not start.")
+        return
+
+    try: port = int(HTTP_PORT_STR)
+    except ValueError:
+        logging.error(f"Invalid PORT environment variable: {HTTP_PORT_STR}. Dummy HTTP server will not start.")
+        return
+
     app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="Bot is online!"))
+    app.router.add_get('/', handle_health_check)
+    app.router.add_get('/healthz', handle_health_check)
     runner = web.AppRunner(app)
     await runner.setup()
-    # Koyeb assigns a port automatically; 8080 is the default.
-    port = int(os.getenv("PORT", "8080"))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    while True:
-        await asyncio.sleep(3600)
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    try:
+        await site.start()
+        logging.info(f"Dummy HTTP server started successfully on port {port}.")
+        while True:
+            await asyncio.sleep(3600)
     except asyncio.CancelledError:
         logging.info("Dummy HTTP server task cancelled.")
     except Exception as e:
@@ -1427,14 +1409,10 @@ async def main():
             logging.critical("FATAL: Database or bot info missing after setup. Cannot start.")
             return
 
-        # 1. Clear Webhooks (Fixes the "Conflict" error automatically)
-        await bot.delete_webhook(drop_pending_updates=True)
-
-        # 2. Register middleware
+        # --- NEW: Register middleware ---
         dp.message.middleware(BlockUserMiddleware())
         dp.callback_query.middleware(BlockUserMiddleware())
 
-        # 3. Setup Commands (Standard and Admin)
         commands = [
             types.BotCommand(command="start", description="Start/View confession"),
             types.BotCommand(command="confess", description="Submit anonymous confession"),
@@ -1454,20 +1432,18 @@ async def main():
         await bot.set_my_commands(commands)
         await bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(chat_id=ADMIN_ID))
 
-        # 4. Start Dummy Server in the background (Non-blocking)
+        tasks = [asyncio.create_task(dp.start_polling(bot, skip_updates=True))]
         if HTTP_PORT_STR:
-            asyncio.create_task(start_dummy_server())
-            logging.info(f"Health check server running on port {HTTP_PORT_STR}")
+            tasks.append(asyncio.create_task(start_dummy_server()))
         
-        # 5. Start Polling
-        logging.info("Bot is now polling...")
-        # No skip_updates=True so we don't lose messages during deployment
-        await dp.start_polling(bot)
+        logging.info("Starting bot...")
+        await asyncio.gather(*tasks)
 
     except Exception as e:
         logging.critical(f"Fatal error during main execution: {e}", exc_info=True)
     finally:
         logging.info("Shutting down...")
+        # *** FIX: Correctly close the bot session on shutdown ***
         if bot and bot.session:
             await bot.session.close()
         if db:
@@ -1479,6 +1455,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("Bot stopped by user.")
-
-
-
