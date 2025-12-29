@@ -405,61 +405,41 @@ async def handle_reactions(cb: types.CallbackQuery):
         await conn.execute("UPDATE user_points SET points = points + $1 WHERE user_id = $2", points, comment_info['user_id'])
 
     await cb.answer(f"You {'liked' if r_type == 'like' else 'disliked'} this comment!")
-# ==========================================
-# MODULE 7: TRENDING, PROFILE & DEBUG
-# ==========================================
-
-@dp.message(Command("hot"))
-async def show_trending(message: types.Message):
-    """Algorithm: Most comments in the last 7 days."""
-    async with db.acquire() as conn:
-        hot_posts = await conn.fetch("""
-            SELECT c.id, c.text, COUNT(com.id) as comment_count 
-            FROM confessions c 
-            JOIN comments com ON c.id = com.confession_id 
-            WHERE c.status = 'approved' AND c.created_at > NOW() - INTERVAL '7 days'
-            GROUP BY c.id 
-            ORDER BY comment_count DESC 
-            LIMIT 5
-        """)
-    
-    if not hot_posts:
-        return await message.answer("🔥 No hot topics yet. Start a discussion!")
-
-    text = "<b>🔥 Trending Discussions</b>\n\n"
-    for row in hot_posts:
-        text += f"<b>#{row['id']}</b> ({row['comment_count']} 💬)\n/start view_{row['id']}\n\n"
-    await message.answer(text)
-
-@dp.message(Command("profile"))
-async def cmd_profile(message: types.Message):
-    user_id = message.from_user.id
-    async with db.acquire() as conn:
-        points = await conn.fetchval("SELECT points FROM user_points WHERE user_id = $1", user_id) or 0
-    await message.answer(f"👤 <b>Your Profile</b>\n\n🏅 <b>Aura Points:</b> {points}")
-
-# --- ADDED DEBUG COMMAND HERE ---
-
 @dp.message(Command("test_admin"))
 async def cmd_test_admin(message: types.Message):
-    """Checks if YOU are in the admin list and if the bot can reach you."""
-    uid = message.from_user.id
+    """The most powerful diagnostic tool for your bot."""
+    my_id = message.from_user.id
     
-    # We use the is_admin function from Module 2
-    if is_admin(uid):
-        await message.answer(f"✅ <b>Status: SUCCESS</b>\nYour ID (<code>{uid}</code>) is recognized as an Admin.")
+    # 1. Check if ID is in the memory list
+    in_list = my_id in ADMIN_IDS
+    
+    status_msg = (
+        f"🔍 <b>DEBUG REPORT</b>\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🔹 <b>Your ID:</b> <code>{my_id}</code>\n"
+        f"🔹 <b>Admin List:</b> <code>{ADMIN_IDS}</code>\n"
+        f"🔹 <b>Match Found:</b> {'✅ YES' if in_list else '❌ NO'}\n"
+        f"━━━━━━━━━━━━━━\n"
+    )
+    
+    await message.answer(status_msg)
+
+    # 2. Try a Forced Send (This is where we find the error)
+    if in_list:
+        await message.answer("🔄 <i>Attempting to send forced notification...</i>")
         try:
-            await bot.send_message(uid, "🔔 <b>Test Notification:</b> If you see this, the approval system will work!")
+            # We use the raw 'bot' object to bypass any middleware
+            await bot.send_message(
+                chat_id=my_id, 
+                text=f"🔔 <b>SUCCESS!</b>\nThe bot reached you at {my_id}.\nIf you see this, the approval system SHOULD work."
+            )
+            await message.answer("✅ <b>Direct Send: SUCCESS</b>")
         except Exception as e:
-            await message.answer(f"❌ <b>Error:</b> I recognize you, but I cannot message you. Have you blocked the bot?\nError: {e}")
+            # This is the most important part!
+            error_text = str(e)
+            await message.answer(f"❌ <b>Direct Send: FAILED</b>\n\n<b>Reason:</b> <code>{error_text}</code>")
     else:
-        # This part helps you see exactly what the bot has in its memory
-        await message.answer(
-            f"❌ <b>Status: NOT RECOGNIZED</b>\n\n"
-            f"Your ID: <code>{uid}</code>\n"
-            f"IDs in Bot Memory: <code>{ADMIN_IDS}</code>\n\n"
-            f"<b>To fix this:</b> Copy your ID above and paste it into the ADMIN_ID variable on Render."
-        )
+        await message.answer("⚠️ <b>Action Required:</b> Update your Render ADMIN_ID variable with the ID shown above.")
 # ==========================================
 # MODULE 8: MODERATION TOOLS & BROADCASTS
 # ==========================================
@@ -615,6 +595,7 @@ if __name__ == "__main__":
     asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot stopped.")
+
 
 
 
