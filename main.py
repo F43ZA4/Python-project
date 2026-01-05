@@ -2,6 +2,10 @@ import logging
 import asyncpg
 import os
 import asyncio
+import threading  
+import time       
+import requests   
+# ... rest of your aiogram imports
 from aiogram import Bot, Dispatcher, types, F, html
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject, StateFilter
@@ -21,6 +25,28 @@ from typing import Optional, Tuple, Dict, Any, List
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 
 from aiohttp import web
+# --- Self-Ping for Render (Keep-Alive) ---
+def keep_alive():
+    # Use your actual Render URL here
+    url = "https://your-app-name.onrender.com" 
+    
+    # Give the server a few seconds to finish booting before the first ping
+    time.sleep(10)
+    
+    while True:
+        try:
+            # Pinging every 12 minutes (720 seconds)
+            requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            logging.info("Self-ping successful.")
+        except Exception as e:
+            logging.error(f"Self-ping failed: {e}")
+        time.sleep(720) 
+
+# Start thread immediately in the background
+threading.Thread(target=keep_alive, daemon=True).start()
+
+# --- Your Constants start here ---
+CATEGORIES = [ ... ]
 
 # --- Constants ---
 CATEGORIES = [
@@ -1435,4 +1461,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot stopped.")
+
 
