@@ -2,10 +2,6 @@ import logging
 import asyncpg
 import os
 import asyncio
-import threading  
-import time       
-import requests   
-# ... rest of your aiogram imports
 from aiogram import Bot, Dispatcher, types, F, html
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject, StateFilter
@@ -25,28 +21,6 @@ from typing import Optional, Tuple, Dict, Any, List
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 
 from aiohttp import web
-# --- Self-Ping for Render (Keep-Alive) ---
-def keep_alive():
-    # Use your actual Render URL here
-    url = "https://your-app-name.onrender.com" 
-    
-    # Give the server a few seconds to finish booting before the first ping
-    time.sleep(10)
-    
-    while True:
-        try:
-            # Pinging every 12 minutes (720 seconds)
-            requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-            logging.info("Self-ping successful.")
-        except Exception as e:
-            logging.error(f"Self-ping failed: {e}")
-        time.sleep(720) 
-
-# Start thread immediately in the background
-threading.Thread(target=keep_alive, daemon=True).start()
-
-# --- Your Constants start here ---
-CATEGORIES = [ ... ]
 
 # --- Constants ---
 CATEGORIES = [
@@ -638,7 +612,7 @@ async def start_contact_admin_callback(callback_query: types.CallbackQuery, stat
 
 @dp.message(Command("privacy"), StateFilter(None))
 async def show_privacy(message: types.Message):
-    privacy_policy_url = "https://telegra.ph/Privacy-Policy-for-MWU-Confessions-Bot-12-31"
+    privacy_policy_url = "https://telegra.ph/Privacy-Policy-for-AAU-Confessions-Bot-04-27"
     privacy_text = (
         "<b>Privacy Information</b>\n\n"
         "▪️ Your Telegram User ID is stored but never shown to other users.\n"
@@ -1429,37 +1403,55 @@ async def handle_text_without_state(message: types.Message):
 
 # --- Main Execution ---
 async def main():
-    # 1. Initialize Database and Bot Info
-    await setup()
-
-    # 2. Add the Block User Middleware (if not already attached)
-    dp.update.outer_middleware(BlockUserMiddleware())
-
-    # 3. Define the Web Server Task
-    # This satisfies Render's requirement to bind to a PORT
-    server_task = asyncio.create_task(start_dummy_server())
-
-    # 4. Define the Bot Polling Task
-    # We delete webhooks first to ensure polling works
-    await bot.delete_webhook(drop_pending_updates=True)
-    polling_task = asyncio.create_task(dp.start_polling(bot))
-
-    logging.info("Everything is running. Web server on PORT and Bot polling...")
-
-    # 5. Run both tasks forever
     try:
-        await asyncio.gather(server_task, polling_task)
+        await setup()
+        if not db or not bot_info:
+            logging.critical("FATAL: Database or bot info missing after setup. Cannot start.")
+            return
+
+        # --- NEW: Register middleware ---
+        dp.message.middleware(BlockUserMiddleware())
+        dp.callback_query.middleware(BlockUserMiddleware())
+
+        commands = [
+            types.BotCommand(command="start", description="Start/View confession"),
+            types.BotCommand(command="confess", description="Submit anonymous confession"),
+            types.BotCommand(command="profile", description="View your profile and history"),
+            types.BotCommand(command="help", description="Show help and commands"),
+            types.BotCommand(command="rules", description="View the bot's rules"),
+            types.BotCommand(command="privacy", description="View privacy information"),
+            types.BotCommand(command="cancel", description="Cancel current action"),
+        ]
+        admin_commands = commands + [
+            types.BotCommand(command="id", description="ADMIN: Get user info"),
+            types.BotCommand(command="warn", description="ADMIN: Warn a user"),
+            types.BotCommand(command="block", description="ADMIN: Temporarily block a user"),
+            types.BotCommand(command="pblock", description="ADMIN: Permanently block a user"),
+            types.BotCommand(command="unblock", description="ADMIN: Unblock a user"),
+        ]
+        await bot.set_my_commands(commands)
+        await bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(chat_id=ADMIN_ID))
+
+        tasks = [asyncio.create_task(dp.start_polling(bot, skip_updates=True))]
+        if HTTP_PORT_STR:
+            tasks.append(asyncio.create_task(start_dummy_server()))
+        
+        logging.info("Starting bot...")
+        await asyncio.gather(*tasks)
+
     except Exception as e:
-        logging.error(f"Critical error in main loop: {e}")
+        logging.critical(f"Fatal error during main execution: {e}", exc_info=True)
     finally:
+        logging.info("Shutting down...")
+        # *** FIX: Correctly close the bot session on shutdown ***
+        if bot and bot.session:
+            await bot.session.close()
         if db:
             await db.close()
-        await bot.session.close()
+        logging.info("Bot stopped.")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Bot stopped.")
-
-
+    except KeyboardInterrupt:
+        logging.info("Bot stopped by user.")
