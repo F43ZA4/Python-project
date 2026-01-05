@@ -1435,49 +1435,48 @@ async def main():
             logging.critical("FATAL: Database or bot info missing after setup. Cannot start.")
             return
 
-        # --- NEW: Register middleware ---
-        dp.message.middleware(BlockUserMiddleware())
-        dp.callback_query.middleware(BlockUserMiddleware())
+        # --- Register Middleware ---
+        # Note: Using .outer_middleware() ensures it runs before any filters
+        dp.message.outer_middleware(BlockUserMiddleware())
+        dp.callback_query.outer_middleware(BlockUserMiddleware())
 
+        # --- Set Bot Commands ---
         commands = [
             types.BotCommand(command="start", description="Start/View confession"),
             types.BotCommand(command="confess", description="Submit anonymous confession"),
-            types.BotCommand(command="profile", description="View your profile and history"),
-            types.BotCommand(command="help", description="Show help and commands"),
-            types.BotCommand(command="rules", description="View the bot's rules"),
-            types.BotCommand(command="privacy", description="View privacy information"),
+            types.BotCommand(command="profile", description="View your profile"),
+            types.BotCommand(command="rules", description="View rules"),
+            types.BotCommand(command="help", description="Help & info"),
             types.BotCommand(command="cancel", description="Cancel current action"),
         ]
         admin_commands = commands + [
-            types.BotCommand(command="id", description="ADMIN: Get user info"),
-            types.BotCommand(command="warn", description="ADMIN: Warn a user"),
-            types.BotCommand(command="block", description="ADMIN: Temporarily block a user"),
-            types.BotCommand(command="pblock", description="ADMIN: Permanently block a user"),
-            types.BotCommand(command="unblock", description="ADMIN: Unblock a user"),
+            types.BotCommand(command="id", description="ADMIN: User info"),
+            types.BotCommand(command="warn", description="ADMIN: Warn user"),
+            types.BotCommand(command="block", description="ADMIN: Temp block"),
+            types.BotCommand(command="unblock", description="ADMIN: Unblock"),
         ]
+        
         await bot.set_my_commands(commands)
         await bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(chat_id=ADMIN_ID))
 
-        tasks = [asyncio.create_task(dp.start_polling(bot, skip_updates=True))]
+        # --- CRITICAL: Cleanup old sessions for Render ---
+        logging.info("Deleting webhook and dropping pending updates...")
+        await bot.delete_webhook(drop_pending_updates=True)
+
+        # --- Tasks Execution ---
+        tasks = [asyncio.create_task(dp.start_polling(bot, skip_updates=False))] 
         if HTTP_PORT_STR:
             tasks.append(asyncio.create_task(start_dummy_server()))
         
-        logging.info("Starting bot...")
+        logging.info("Bot is now live and polling.")
         await asyncio.gather(*tasks)
 
     except Exception as e:
         logging.critical(f"Fatal error during main execution: {e}", exc_info=True)
     finally:
-        logging.info("Shutting down...")
-        # *** FIX: Correctly close the bot session on shutdown ***
-        if bot and bot.session:
+        logging.info("Initiating shutdown...")
+        if bot:
             await bot.session.close()
         if db:
             await db.close()
-        logging.info("Bot stopped.")
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logging.info("Bot stopped by user.")
+        logging.info("Cleanup complete. Bot stopped.")
