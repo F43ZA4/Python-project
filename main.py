@@ -612,7 +612,7 @@ async def start_contact_admin_callback(callback_query: types.CallbackQuery, stat
 
 @dp.message(Command("privacy"), StateFilter(None))
 async def show_privacy(message: types.Message):
-    privacy_policy_url = "https://telegra.ph/Privacy-Policy-for-AAU-Confessions-Bot-04-27"
+    privacy_policy_url = "https://telegra.ph/Privacy-Policy-for-MWU-Confessions-Bot-12-31"
     privacy_text = (
         "<b>Privacy Information</b>\n\n"
         "▪️ Your Telegram User ID is stored but never shown to other users.\n"
@@ -1455,3 +1455,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("Bot stopped by user.")
+
