@@ -2,6 +2,7 @@ import logging
 import asyncpg
 import os
 import asyncio
+from aiohttp import web 
 from aiogram import Bot, Dispatcher, types, F, html
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject, StateFilter
@@ -12,15 +13,16 @@ from dotenv import load_dotenv
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup,
-    KeyboardButton, ReplyKeyboardRemove, ForceReply
+    KeyboardButton, ReplyKeyboardRemove, ForceReply, InputMediaPhoto
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application 
 from datetime import datetime, timedelta
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from typing import Optional, Tuple, Dict, Any, List
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 
-from aiohttp import web
+
 
 # --- Constants ---
 CATEGORIES = [
@@ -32,6 +34,7 @@ POINTS_PER_CONFESSION = 1
 POINTS_PER_LIKE_RECEIVED = 3
 POINTS_PER_DISLIKE_RECEIVED = -3
 MAX_CATEGORIES = 3 # Maximum categories allowed per confession
+MAX_PHOTO_SIZE_MB = 5  # Maximum photo size in MB
 
 # Load environment variables at the top level
 load_dotenv()
@@ -112,30 +115,27 @@ async def setup():
                 user_id BIGINT NOT NULL,
                 status VARCHAR(10) DEFAULT 'pending',
                 message_id BIGINT,
+                photo_file_id TEXT NULL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 rejection_reason TEXT NULL,
                 categories TEXT[] NULL
             );
         """)
         logging.info("Checked/Created 'confessions' table.")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_confessions_categories ON confessions USING gin(categories);")
-        logging.info("Checked/Created GIN index on 'confessions.categories'.")
-
-        # --- Comments Table Schema ---
+        
+        # Ensure photo_file_id column exists (for backward compatibility)
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS comments (
-                id SERIAL PRIMARY KEY,
-                confession_id INTEGER REFERENCES confessions(id) ON DELETE CASCADE,
-                user_id BIGINT NOT NULL,
-                text TEXT NULL,
-                sticker_file_id TEXT NULL,
-                animation_file_id TEXT NULL,
-                parent_comment_id INTEGER REFERENCES comments(id) ON DELETE SET NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                CONSTRAINT one_content_type CHECK (num_nonnulls(text, sticker_file_id, animation_file_id) = 1)
-            );
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='confessions' AND column_name='photo_file_id') THEN
+                    ALTER TABLE confessions ADD COLUMN photo_file_id TEXT NULL;
+                END IF;
+            END $$;
         """)
-        logging.info("Checked/Created 'comments' table.")
+        logging.info("Ensured photo_file_id column exists.")
+        
+        # ... rest of your existing setup code ...
 
         # --- Reactions Table ---
         await conn.execute("""
@@ -497,8 +497,8 @@ async def show_rules(message: types.Message):
         "2.  <b>Respectful Communication:</b> Sensitive topics (political, religious, cultural, etc.) are allowed but must be discussed with respect.\n\n"
         "3.  <b>No Harmful Content:</b> You may mention names, but at your own risk.\n\n - The bot and admins are not responsible for any consequences.\n\n - If someone mentioned requests removal, their name will be taken down.\n\n"
         "4.  <b>Names & Responsibility:</b> Do not share personal identifying information about yourself or others.\n\n"
-        "5.  <b>Anonymity & Privacy:</b> don’t reveal private details of others (contacts, adress, etc.) without consent.\n\n"
-        "6.  <b>Constructive Environment:</b> Keep confessions genuine. Avoid spam, trolling, or repeated submissions.\n\n - Respect moderators’ decisions on approvals, edits, or removals.\n\n\n"
+        "5.  <b>Anonymity & Privacy:</b> don't reveal private details of others (contacts, adress, etc.) without consent.\n\n"
+        "6.  <b>Constructive Environment:</b> Keep confessions genuine. Avoid spam, trolling, or repeated submissions.\n\n - Respect moderators' decisions on approvals, edits, or removals.\n\n\n"
         "<i>Use this space to connect, share, and learn, not to spread misinformation or cause unnecessary drama.</i>"
     )
     await message.answer(rules_text)
@@ -520,8 +520,8 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
         "2.  <b>Respectful Communication:</b> Sensitive topics (political, religious, cultural, etc.) are allowed but must be discussed with respect.\n\n"
         "3.  <b>No Harmful Content:</b> You may mention names, but at your own risk.\n\n - The bot and admins are not responsible for any consequences.\n\n - If someone mentioned requests removal, their name will be taken down.\n\n"
         "4.  <b>Names & Responsibility:</b> Do not share personal identifying information about yourself or others.\n\n"
-        "5.  <b>Anonymity & Privacy:</b> don’t reveal private details of others (contacts, adress, etc.) without consent.\n\n"
-        "6.  <b>Constructive Environment:</b> Keep confessions genuine. Avoid spam, trolling, or repeated submissions.\n\n - Respect moderators’ decisions on approvals, edits, or removals.\n\n\n"
+        "5.  <b>Anonymity & Privacy:</b> don't reveal private details of others (contacts, adress, etc.) without consent.\n\n"
+        "6.  <b>Constructive Environment:</b> Keep confessions genuine. Avoid spam, trolling, or repeated submissions.\n\n - Respect moderators' decisions on approvals, edits, or removals.\n\n\n"
         "<i>Use this space to connect, share, and learn, not to spread misinformation or cause unnecessary drama.</i>"
         )
         accept_keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -536,16 +536,32 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
             conf_id = int(deep_link_args.split("_", 1)[1])
             logging.info(f"User {message.from_user.id} started via deep link for conf {conf_id}")
             async with db.acquire() as conn:
-                conf_data = await conn.fetchrow("SELECT c.text, c.categories, c.status, c.user_id, COUNT(com.id) as comment_count FROM confessions c LEFT JOIN comments com ON c.id = com.confession_id WHERE c.id = $1 GROUP BY c.id", conf_id)
+                conf_data = await conn.fetchrow("SELECT c.text, c.categories, c.status, c.user_id, c.photo_file_id, COUNT(com.id) as comment_count FROM confessions c LEFT JOIN comments com ON c.id = com.confession_id WHERE c.id = $1 GROUP BY c.id", conf_id)
             if not conf_data or conf_data['status'] != 'approved':
                 await message.answer(f"Confession #{conf_id} not found or not approved."); return
             comm_count = conf_data['comment_count']; categories = conf_data['categories'] or []; category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories]) if categories else "#Unknown"
-            txt = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
-            builder = InlineKeyboardBuilder()
-            builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
-            builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
-            builder.adjust(1, 1)
-            await message.answer(txt, reply_markup=builder.as_markup())
+            
+            # Check if confession has photo
+            if conf_data['photo_file_id']:
+                caption = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
+                builder = InlineKeyboardBuilder()
+                builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
+                builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
+                builder.adjust(1, 1)
+                
+                await bot.send_photo(
+                    chat_id=user_id,
+                    photo=conf_data['photo_file_id'],
+                    caption=caption,
+                    reply_markup=builder.as_markup()
+                )
+            else:
+                txt = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
+                builder = InlineKeyboardBuilder()
+                builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
+                builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
+                builder.adjust(1, 1)
+                await message.answer(txt, reply_markup=builder.as_markup())
         except (ValueError, IndexError): await message.answer("Invalid link.")
         except Exception as e: logging.error(f"Err handling deep link '{deep_link_args}': {e}", exc_info=True); await message.answer("Error processing link.")
     else: await message.answer("Welcome! Use /confess to share anonymously, /profile to see your history, or /help for more info.", reply_markup=ReplyKeyboardRemove())
@@ -570,7 +586,7 @@ async def show_help(message: types.Message):
     help_text = (
         "<b>Welcome to the Confession Bot!</b>\n\n"
         "Here's how to use the bot:\n"
-        "🔹 /confess - Submit a new anonymous confession.\n"
+        "🔹 /confess - Submit a new anonymous confession (text or photo with caption).\n"
         "🔹 /profile - View your medal points, past confessions, and comments.\n"
         "🔹 /start - Show the welcome message.\n"
         "🔹 /help - Display this help message.\n"
@@ -612,7 +628,7 @@ async def start_contact_admin_callback(callback_query: types.CallbackQuery, stat
 
 @dp.message(Command("privacy"), StateFilter(None))
 async def show_privacy(message: types.Message):
-    privacy_policy_url = "https://telegra.ph/Privacy-Policy-for-MWU-Confessions-Bot-12-31"
+    privacy_policy_url = "telegra.ph/Privacy-Policy-for-MWU-Confessions-Bot-12-31"
     privacy_text = (
         "<b>Privacy Information</b>\n\n"
         "▪️ Your Telegram User ID is stored but never shown to other users.\n"
@@ -752,14 +768,15 @@ async def handle_profile_menu(callback_query: types.CallbackQuery):
                 total_pages = (total_count + 5 - 1) // 5
                 page = max(1, min(page, total_pages))
                 offset = (page - 1) * 5
-                confessions = await conn.fetch("SELECT id, text, status, created_at FROM confessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5 OFFSET $2", user_id, offset)
+                confessions = await conn.fetch("SELECT id, text, status, created_at, photo_file_id FROM confessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5 OFFSET $2", user_id, offset)
 
             response_text = f"<b>📜 Your Confessions (Page {page}/{total_pages})</b>\n\n"
             builder = InlineKeyboardBuilder()
             for conf in confessions:
                 snippet = html.quote(conf['text'][:60]) + ('...' if len(conf['text']) > 60 else '')
                 status_emoji = {"approved": "✅", "pending": "⏳", "rejected": "❌", "deleted": "🗑️"}.get(conf['status'], "❓")
-                response_text += f"<b>ID:</b> #{conf['id']} ({status_emoji} {conf['status'].capitalize()})\n<i>\"{snippet}\"</i>\n\n"
+                photo_indicator = " 📷" if conf['photo_file_id'] else ""
+                response_text += f"<b>ID:</b> #{conf['id']} ({status_emoji} {conf['status'].capitalize()}{photo_indicator})\n<i>\"{snippet}\"</i>\n\n"
                 if conf['status'] in ['approved', 'pending']:
                     builder.row(InlineKeyboardButton(text=f"Request Deletion for #{conf['id']}", callback_data=f"req_del_conf_{conf['id']}"))
 
@@ -858,7 +875,15 @@ async def confirm_deletion_request(callback_query: types.CallbackQuery):
 @dp.message(Command("confess"), StateFilter(None))
 async def start_confession(message: types.Message, state: FSMContext):
     await state.update_data(selected_categories=[])
-    await message.answer(f"Please choose 1 to {MAX_CATEGORIES} categories. Click 'Done Selecting' when finished.", reply_markup=create_category_keyboard([]))
+    await message.answer(
+        f"📝 <b>Confession Submission</b>\n\n"
+        f"Please choose 1 to {MAX_CATEGORIES} categories. Click 'Done Selecting' when finished.\n\n"
+        f"<i>After selecting categories, you can submit:</i>\n"
+        f"• Text-only confession: Send your text\n"
+        f"• Photo with caption: Send a photo with caption (max {MAX_PHOTO_SIZE_MB}MB)\n\n"
+        f"<i>Categories will help users find your confession.</i>",
+        reply_markup=create_category_keyboard([])
+    )
     await state.set_state(ConfessionForm.selecting_categories)
 
 @dp.callback_query(StateFilter(ConfessionForm.selecting_categories), F.data.startswith("category_"))
@@ -872,7 +897,14 @@ async def handle_category_selection(callback_query: types.CallbackQuery, state: 
         if len(selected_categories) > MAX_CATEGORIES: await callback_query.answer(f"Too many categories (max {MAX_CATEGORIES}).", show_alert=True); return
         await state.set_state(ConfessionForm.waiting_for_text)
         category_tags = " ".join([f"#{html.quote(cat)}" for cat in selected_categories])
-        await callback_query.message.edit_text(f"Categories selected: <b>{category_tags}</b>\n\nNow, send the text of your confession, or /cancel.", reply_markup=None)
+        
+        await callback_query.message.edit_text(
+            f"✅ <b>Categories selected:</b> {category_tags}\n\n"
+            f"📝 <b>Now, send your confession:</b>\n\n"
+            f"• Text only: Send your confession text (min 10 chars, max 3900 chars)\n"
+            f"• Text with photo: Send a photo with caption (photo max {MAX_PHOTO_SIZE_MB}MB)\n\n"
+            f"<i>Type /cancel to abort.</i>"
+        )
         await callback_query.answer(); return
     category = action
     if category in CATEGORIES:
@@ -883,65 +915,248 @@ async def handle_category_selection(callback_query: types.CallbackQuery, state: 
         await callback_query.message.edit_reply_markup(reply_markup=create_category_keyboard(selected_categories))
         await callback_query.answer(f"'{category}' {'selected' if category in selected_categories else 'deselected'}.")
 
+# Handle text-only confession
 @dp.message(ConfessionForm.waiting_for_text, F.text)
-async def receive_confession_text(message: types.Message, state: FSMContext):
-    conf_text = message.text; user_id = message.from_user.id; state_data = await state.get_data(); selected_categories: List[str] = state_data.get("selected_categories", [])
+async def receive_text_confession(message: types.Message, state: FSMContext):
+    if message.text.startswith('/'):
+        return
+    
+    await process_confession(message, state, text=message.text, photo_file_id=None)
+
+# Handle photo with caption confession
+@dp.message(ConfessionForm.waiting_for_text, F.photo)
+async def receive_photo_confession(message: types.Message, state: FSMContext):
+    # Get the best quality photo (last one in array is highest quality)
+    photo_file_id = message.photo[-1].file_id
+    text = message.caption or ""
+    
+    if not text.strip():
+        await message.answer("❌ Please add a caption to your photo. The caption is your confession text.")
+        return
+    
+    # Check file size (optional)
+    file_size_mb = message.photo[-1].file_size / (1024 * 1024) if message.photo[-1].file_size else 0
+    
+    if file_size_mb > MAX_PHOTO_SIZE_MB:
+        await message.answer(f"❌ Photo is too large ({file_size_mb:.1f}MB). Maximum size is {MAX_PHOTO_SIZE_MB}MB.")
+        return
+    
+    await process_confession(message, state, text=text, photo_file_id=photo_file_id)
+
+async def process_confession(message: types.Message, state: FSMContext, text: str, photo_file_id: Optional[str] = None):
+    conf_text = text
+    user_id = message.from_user.id
+    state_data = await state.get_data()
+    selected_categories: List[str] = state_data.get("selected_categories", [])
+    
     if not selected_categories:
-        await message.answer("⚠️ Error: Category info lost. Please start again with /confess."); await state.clear(); return
-    if len(conf_text) < 10: await message.answer("Confession too short (min 10 chars)."); return
-    if len(conf_text) > 3900: await message.answer(f"Confession too long (max 3900 chars)."); return
+        await message.answer("⚠️ Error: Category info lost. Please start again with /confess.")
+        await state.clear()
+        return
+    
+    if len(conf_text) < 10:
+        await message.answer("Confession too short (min 10 chars).")
+        return
+    
+    if len(conf_text) > 3900:
+        await message.answer(f"Confession too long (max 3900 chars).")
+        return
+    
     try:
         async with db.acquire() as conn:
             async with conn.transaction():
-                conf_id = await conn.fetchval("INSERT INTO confessions (text, user_id, categories, status) VALUES ($1, $2, $3, 'pending') RETURNING id", conf_text, user_id, selected_categories)
-                if not conf_id: raise Exception("Failed to get confession ID")
+                # FIX: Convert Python list to PostgreSQL array using CAST
+                if photo_file_id:
+                    conf_id = await conn.fetchval(
+                        "INSERT INTO confessions (text, user_id, categories, status, photo_file_id) VALUES ($1, $2, $3::text[], 'pending', $4) RETURNING id", 
+                        conf_text, user_id, selected_categories, photo_file_id
+                    )
+                else:
+                    conf_id = await conn.fetchval(
+                        "INSERT INTO confessions (text, user_id, categories, status) VALUES ($1, $2, $3::text[], 'pending') RETURNING id", 
+                        conf_text, user_id, selected_categories
+                    )
+                
+                if not conf_id:
+                    raise Exception("Failed to get confession ID")
+                
                 await update_user_points(conn, user_id, POINTS_PER_CONFESSION)
+        
         category_tags = " ".join([f"#{html.quote(cat)}" for cat in selected_categories])
-        kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Approve", callback_data=f"approve_{conf_id}")], [InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_{conf_id}")]])
-        admin_msg_text = f"<b>New Confession Review</b>\n<b>ID:</b> {conf_id}\n<b>Categories:</b> {category_tags}\n<b>User ID:</b> <code>{user_id}</code>\n\n<b>Text:</b>\n{html.quote(conf_text)}"
-        await bot.send_message(ADMIN_ID, admin_msg_text, reply_markup=kbd)
-        await message.answer("✅ Your confession has been submitted and is pending review.")
-        logging.info(f"Confession #{conf_id} (Categories: {', '.join(selected_categories)}) submitted by User ID {user_id}")
+        
+        # Send to admin based on confession type
+        if photo_file_id:
+            # Photo confession to admin
+            admin_caption = (
+                f"🖼️ <b>New Photo Confession Review</b>\n"
+                f"<b>ID:</b> {conf_id}\n"
+                f"<b>Categories:</b> {category_tags}\n"
+                f"<b>User ID:</b> <code>{user_id}</code>\n\n"
+                f"<b>Caption:</b>\n{html.quote(conf_text)}"
+            )
+            
+            kbd = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Approve", callback_data=f"approve_{conf_id}")],
+                [InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_{conf_id}")]
+            ])
+            
+            await bot.send_photo(
+                chat_id=ADMIN_ID,
+                photo=photo_file_id,
+                caption=admin_caption,
+                reply_markup=kbd
+            )
+            
+            await message.answer(
+                f"✅ <b>Your photo confession has been submitted!</b>\n\n"
+                f"<b>Confession ID:</b> #{conf_id}\n"
+                f"<b>Categories:</b> {category_tags}\n\n"
+                f"<i>An admin will review it shortly. You'll be notified when it's approved.</i>"
+            )
+        else:
+            # Text-only confession
+            admin_msg_text = (
+                f"<b>New Confession Review</b>\n"
+                f"<b>ID:</b> {conf_id}\n"
+                f"<b>Categories:</b> {category_tags}\n"
+                f"<b>User ID:</b> <code>{user_id}</code>\n\n"
+                f"<b>Text:</b>\n{html.quote(conf_text)}"
+            )
+            
+            kbd = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Approve", callback_data=f"approve_{conf_id}")],
+                [InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_{conf_id}")]
+            ])
+            
+            await bot.send_message(ADMIN_ID, admin_msg_text, reply_markup=kbd)
+            await message.answer("✅ Your confession has been submitted and is pending review.")
+        
+        logging.info(f"Confession #{conf_id} (Photo: {bool(photo_file_id)}) submitted by User ID {user_id}")
+        
     except Exception as e:
         logging.error(f"Error processing confession from {user_id}: {e}", exc_info=True)
-        await message.answer("An internal error occurred.")
-    finally: await state.clear()
-
+        await message.answer(f"❌ Error: {str(e)[:100]}")
+        
+    finally: 
+        await state.clear()
 
 # --- Admin Action Handlers ---
-# *** FIX: Make lambda filter more specific to avoid conflict with contact requests ***
-@dp.callback_query(lambda c: c.data.startswith(("approve_", "reject_")) and len(c.data.split("_")) == 2 and c.data.split("_")[1].isdigit())
-async def admin_action(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_ID: await callback_query.answer("Unauthorized.", show_alert=True); return
-    action, conf_id_str = callback_query.data.split("_", 1); conf_id = int(conf_id_str)
+@dp.callback_query(F.data.startswith("approve_"))
+async def handle_approve_confession(callback_query: types.CallbackQuery, state: FSMContext):
+    """Handle approve button for confessions"""
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer("Unauthorized.", show_alert=True)
+        return
+    
+    try:
+        # Get confession ID from callback data (approve_123)
+        conf_id = int(callback_query.data.split("_")[1])
+    except (IndexError, ValueError):
+        await callback_query.answer("Invalid confession ID.", show_alert=True)
+        return
     
     async with db.acquire() as conn:
-        conf = await conn.fetchrow("SELECT id, text, user_id, categories, status, (SELECT message_id FROM confessions WHERE id=$1) as original_message_id FROM confessions WHERE id = $1", conf_id)
-        if not conf: await callback_query.answer("Confession not found.", show_alert=True); return
-        if conf['status'] != 'pending': await callback_query.answer(f"Already '{conf['status']}'.", show_alert=True); return
-
-        if action == "approve":
-            try:
-                link = f"https://t.me/{bot_info.username}?start=view_{conf['id']}"
-                category_tags = " ".join([f"#{html.quote(cat)}" for cat in conf['categories'] or []])
-                channel_post_text = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
-                channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
-                msg = await bot.send_message(CHANNEL_ID, channel_post_text, reply_markup=channel_kbd)
-                await conn.execute("UPDATE confessions SET status = 'approved', message_id = $1 WHERE id = $2", msg.message_id, conf_id)
-                await safe_send_message(conf['user_id'], f"✅ Your confession (#{conf_id}) has been approved!")
-                await callback_query.message.edit_text(callback_query.message.html_text + "\n\n-- Approved --", reply_markup=None)
-                await callback_query.answer(f"Confession #{conf_id} approved.")
-            except Exception as e: logging.error(f"Error approving Confession {conf_id}: {e}", exc_info=True); await callback_query.answer(f"Error: {e}", show_alert=True)
-        elif action == "reject":
-            await state.update_data(
-                rejecting_conf_id=conf_id,
-                original_admin_text=callback_query.message.html_text,
-                admin_review_message_id=callback_query.message.message_id
+        conf = await conn.fetchrow(
+            "SELECT id, text, user_id, categories, status, photo_file_id FROM confessions WHERE id = $1", 
+            conf_id
+        )
+        
+        if not conf:
+            await callback_query.answer("Confession not found.", show_alert=True)
+            return
+        
+        if conf['status'] != 'pending':
+            await callback_query.answer(f"Already '{conf['status']}'.", show_alert=True)
+            return
+    
+    try:
+        link = f"https://t.me/{bot_info.username}?start=view_{conf['id']}"
+        category_tags = " ".join([f"#{html.quote(cat)}" for cat in conf['categories'] or []])
+        
+        # Check if it's a photo confession
+        if conf['photo_file_id']:
+            # Post photo confession to channel
+            channel_caption = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
+            channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)
+            ]])
+            
+            msg = await bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=conf['photo_file_id'],
+                caption=channel_caption,
+                reply_markup=channel_kbd
             )
-            await state.set_state(AdminActions.waiting_for_rejection_reason)
-            reason_keyboard = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/skip")], [KeyboardButton(text="/cancel")]], resize_keyboard=True, one_time_keyboard=True)
-            await callback_query.answer("❓ Provide rejection reason")
-            await bot.send_message(callback_query.from_user.id, f"Reason for rejecting Confession #{conf_id}?\nUse /skip or /cancel.", reply_markup=reason_keyboard)
+        else:
+            # Post text confession to channel
+            channel_post_text = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
+            channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)
+            ]])
+            
+            msg = await bot.send_message(CHANNEL_ID, channel_post_text, reply_markup=channel_kbd)
+        
+        # Update database
+        async with db.acquire() as conn:
+            await conn.execute(
+                "UPDATE confessions SET status = 'approved', message_id = $1 WHERE id = $2",
+                msg.message_id, conf_id
+            )
+        
+        # Notify user
+        await safe_send_message(conf['user_id'], f"✅ Your confession (#{conf_id}) has been approved!")
+        
+        # Update admin message
+        await callback_query.message.edit_text(
+            callback_query.message.html_text + "\n\n-- ✅ Approved --",
+            reply_markup=None
+        )
+        
+        await callback_query.answer(f"Confession #{conf_id} approved.")
+        
+    except Exception as e:
+        logging.error(f"Error approving Confession {conf_id}: {e}", exc_info=True)
+        await callback_query.answer(f"Error: {str(e)[:100]}", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("reject_"))
+async def handle_reject_confession(callback_query: types.CallbackQuery, state: FSMContext):
+    """Handle reject button for confessions - starts rejection process"""
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer("Unauthorized.", show_alert=True)
+        return
+    
+    try:
+        # Get confession ID from callback data (reject_123)
+        conf_id = int(callback_query.data.split("_")[1])
+    except (IndexError, ValueError):
+        await callback_query.answer("Invalid confession ID.", show_alert=True)
+        return
+    
+    # Start rejection process
+    await state.update_data(
+        rejecting_conf_id=conf_id,
+        original_admin_text=callback_query.message.html_text,
+        admin_review_message_id=callback_query.message.message_id
+    )
+    
+    await state.set_state(AdminActions.waiting_for_rejection_reason)
+    
+    reason_keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="/skip")],
+            [KeyboardButton(text="/cancel")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    
+    await callback_query.answer("❓ Provide rejection reason")
+    await bot.send_message(
+        callback_query.from_user.id,
+        f"Reason for rejecting Confession #{conf_id}?\nUse /skip or /cancel.",
+        reply_markup=reason_keyboard
+    )
 
 @dp.message(AdminActions.waiting_for_rejection_reason, F.text)
 async def receive_rejection_reason(message: types.Message, state: FSMContext):
@@ -1399,8 +1614,9 @@ async def handle_contact_response(callback_query: types.CallbackQuery):
 # --- Fallback Handler ---
 @dp.message(StateFilter(None), F.text & ~F.text.startswith('/'))
 async def handle_text_without_state(message: types.Message):
-    await message.reply("Hi! 👋 Use /confess to share anonymously, /profile to see your history, or /help for commands.")
+    await message.reply("Hi! 👋 Use /confess to share anonymously (text or photo), /profile to see your history, or /help for commands.")
 
+# --- Main Execution ---
 # --- Main Execution ---
 async def main():
     try:
@@ -1409,13 +1625,14 @@ async def main():
             logging.critical("FATAL: Database or bot info missing after setup. Cannot start.")
             return
 
-        # --- NEW: Register middleware ---
+        # Register middleware
         dp.message.middleware(BlockUserMiddleware())
         dp.callback_query.middleware(BlockUserMiddleware())
 
+        # Set bot commands
         commands = [
             types.BotCommand(command="start", description="Start/View confession"),
-            types.BotCommand(command="confess", description="Submit anonymous confession"),
+            types.BotCommand(command="confess", description="Submit anonymous confession (text or photo)"),
             types.BotCommand(command="profile", description="View your profile and history"),
             types.BotCommand(command="help", description="Show help and commands"),
             types.BotCommand(command="rules", description="View the bot's rules"),
@@ -1432,18 +1649,59 @@ async def main():
         await bot.set_my_commands(commands)
         await bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(chat_id=ADMIN_ID))
 
-        tasks = [asyncio.create_task(dp.start_polling(bot, skip_updates=True))]
-        if HTTP_PORT_STR:
-            tasks.append(asyncio.create_task(start_dummy_server()))
-        
-        logging.info("Starting bot...")
-        await asyncio.gather(*tasks)
+        # --- Webhook Configuration ---
+        # Get webhook URL from Render environment
+        webhook_host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "")
+        if webhook_host:
+            # Use webhook mode on Render
+            WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+            webhook_url = f"https://{webhook_host}{WEBHOOK_PATH}"
+            
+            # Set webhook
+            await bot.set_webhook(
+                webhook_url,
+                drop_pending_updates=True,
+                allowed_updates=dp.resolve_used_update_types()
+            )
+            logging.info(f"Webhook set to: {webhook_url}")
+            
+            # Create aiohttp app
+            app = web.Application()
+            webhook_requests_handler = SimpleRequestHandler(
+                dispatcher=dp,
+                bot=bot,
+            )
+            webhook_requests_handler.register(app, path=WEBHOOK_PATH)
+            
+            # Keep health check endpoint
+            app.router.add_get('/', handle_health_check)
+            app.router.add_get('/healthz', handle_health_check)
+            
+            # Setup application
+            setup_application(app, dp, bot=bot)
+            
+            # Get port from environment
+            port = int(HTTP_PORT_STR) if HTTP_PORT_STR else 10000
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, '0.0.0.0', port)
+            await site.start()
+            logging.info(f"Bot started with webhook on port {port}")
+            
+            # Keep running
+            while True:
+                await asyncio.sleep(3600)
+        else:
+            # Fallback to polling (for local development)
+            logging.info("Starting with polling...")
+            await dp.start_polling(bot, skip_updates=True)
 
     except Exception as e:
         logging.critical(f"Fatal error during main execution: {e}", exc_info=True)
     finally:
         logging.info("Shutting down...")
-        # *** FIX: Correctly close the bot session on shutdown ***
+        if 'webhook_host' in locals() and webhook_host:
+            await bot.delete_webhook(drop_pending_updates=True)
         if bot and bot.session:
             await bot.session.close()
         if db:
