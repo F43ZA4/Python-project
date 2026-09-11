@@ -58,14 +58,139 @@ DAILY_PROMPTS = [
     "What was your most humbling experience this semester?"
 ]
 
-# Emotional Micro-Interactions
-EMOTIONAL_REACTIONS = {
-    "notalone": {"emoji": "🫂", "label": "You're Not Alone"},
-    "heard": {"emoji": "🕯️", "label": "Heard & Felt"},
-    "support": {"emoji": "❤️", "label": "Support"}
+# --- Dynamic Themes System Registry ---
+THEMES = {
+    "default": {
+        "id": "default",
+        "menu_label": "Default",
+        "name": "Default (Daily Rotation)",
+        "tag": "#MWUConfessions",
+        "header_branding": "MWU Confession",
+        "welcome_title": "Anonymous Confession Vault",
+        "welcome_greeting": (
+            "Here, students and peers share their deepest thoughts, hidden struggles, and untold campus stories with <b>100% cryptographic anonymity</b>."
+        ),
+        "description": "Speak your truth anonymously and connect with compassionate peers.",
+        "pinned_categories": [],
+        "reactions": {
+            "notalone": {"emoji": "🫂", "label": "You're Not Alone"},
+            "heard": {"emoji": "🕯️", "label": "Heard & Felt"},
+            "support": {"emoji": "❤️", "label": "Support"}
+        }
+    },
+    "enkutatash_2019": {
+        "id": "enkutatash_2019",
+        "menu_label": "🌼 Ethiopian New Year 2019 (Enkutatash)",
+        "name": "Ethiopian New Year 2019 (Enkutatash)",
+        "tag": "#Enkutatash2019 🌼",
+        "header_branding": "🌼 MWU Confession | Enkutatash 2019 🌼",
+        "welcome_title": "መልካም አዲስ ዓመት 2019! 🌼✨",
+        "welcome_greeting": (
+            "መልካም አዲስ ዓመት 2019! 🌼✨ As the golden Adey Abeba blooms across Ethiopia, may 2019 bring you peace, fresh starts, and forgiveness. "
+            "Leave behind 2018's burdens, unspoken regrets, and silent tears. Share your truth, forgive, and embrace new beginnings with 100% cryptographic anonymity."
+        ),
+        "description": "መልካም አዲስ ዓመት 2019! Celebrate fresh starts, forgiveness, new beginnings, and 2018 reflections.",
+        "pinned_categories": [
+            "New Year Resolutions",
+            "Forgiveness & Fresh Starts",
+            "2018 Regrets & Lessons"
+        ],
+        "reactions": {
+            "adey": {"emoji": "🌼", "label": "Adey Abeba Support"},
+            "newbegin": {"emoji": "✨", "label": "New Beginning"},
+            "cheers": {"emoji": "🥂", "label": "Cheers"}
+        }
+    },
+    "exam_season": {
+        "id": "exam_season",
+        "menu_label": "📚 Exam Season",
+        "name": "Exam Season",
+        "tag": "#ExamSeason 📚",
+        "header_branding": "📚 MWU Confession | Exam Season 🧠",
+        "welcome_title": "Exam Season Confession Vault 📚",
+        "welcome_greeting": (
+            "Midterms, finals, all-nighters, and caffeine overload—vent your study stress, library confessions, exam fails, and survival stories anonymously."
+        ),
+        "description": "Academic survival, exam anxiety, late-night cramming, and peer study motivation.",
+        "pinned_categories": [
+            "Exam Anxiety",
+            "Late Night Study Fails",
+            "Library Confessions"
+        ],
+        "reactions": {
+            "fuel": {"emoji": "☕", "label": "Study Fuel"},
+            "pass": {"emoji": "🙏", "label": "You Will Pass"},
+            "strong": {"emoji": "💪", "label": "Stay Strong"}
+        }
+    },
+    "crush_romance": {
+        "id": "crush_romance",
+        "menu_label": "💌 Crush & Romance",
+        "name": "Crush & Romance",
+        "tag": "#CampusCrush 💌",
+        "header_branding": "💌 MWU Confession | Campus Romance 💘",
+        "welcome_title": "Campus Crush & Romance Vault 💘",
+        "welcome_greeting": (
+            "Secret campus crushes, missed connections, unspoken love letters, and heartfelt feelings shared with total anonymity."
+        ),
+        "description": "Secret admirations, campus crushes, unsent letters, and romantic reflections.",
+        "pinned_categories": [
+            "Campus Crush",
+            "Unsent Love Letters",
+            "Heartbreak & Healing"
+        ],
+        "reactions": {
+            "felt": {"emoji": "💌", "label": "Felt That"},
+            "ship": {"emoji": "💘", "label": "Ship It"},
+            "aww": {"emoji": "🥺", "label": "Aww"}
+        }
+    }
 }
 
+CURRENT_ACTIVE_THEME = "default"
+
+def get_current_theme_config() -> Dict[str, Any]:
+    global CURRENT_ACTIVE_THEME
+    return THEMES.get(CURRENT_ACTIVE_THEME, THEMES["default"])
+
+async def get_active_theme() -> str:
+    global CURRENT_ACTIVE_THEME
+    return CURRENT_ACTIVE_THEME
+
+async def set_active_theme(theme_key: str):
+    global CURRENT_ACTIVE_THEME
+    if theme_key in THEMES:
+        CURRENT_ACTIVE_THEME = theme_key
+        if db:
+            async with db.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO system_config (key, value, updated_at) 
+                    VALUES ('active_theme', $1, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP
+                """, theme_key)
+        logging.info(f"Active theme dynamically switched to: {theme_key}")
+
+def get_available_categories() -> List[str]:
+    theme = get_current_theme_config()
+    pinned = theme.get("pinned_categories", [])
+    return pinned + [c for c in CATEGORIES if c not in pinned]
+
+def get_reaction_meta(r_type: str) -> Dict[str, str]:
+    theme = get_current_theme_config()
+    if r_type in theme["reactions"]:
+        return theme["reactions"][r_type]
+    for t in THEMES.values():
+        if r_type in t.get("reactions", {}):
+            return t["reactions"][r_type]
+    return {"emoji": "❤️", "label": "Support"}
+
+# Backwards compatible alias
+EMOTIONAL_REACTIONS = THEMES["default"]["reactions"]
+
 def get_today_theme():
+    theme = get_current_theme_config()
+    if theme["id"] != "default":
+        return theme["tag"], theme["name"], theme["description"]
     day_idx = datetime.now(timezone.utc).weekday()
     return THEMED_DAYS.get(day_idx, ("#DailyConfessions", "Daily Confessions", "Speak your truth anonymously."))
 
@@ -299,6 +424,26 @@ async def setup():
             );
         """)
         logging.info("Checked/Created 'user_status' table.")
+
+        # --- System Config Table (Dynamic Theme & Configuration Persistence) ---
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS system_config (
+                key VARCHAR(50) PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO system_config (key, value) VALUES ('active_theme', 'default')
+            ON CONFLICT (key) DO NOTHING;
+        """)
+        logging.info("Checked/Created 'system_config' table.")
+
+        # Load persisted active theme across bot restarts
+        stored_theme = await conn.fetchval("SELECT value FROM system_config WHERE key = 'active_theme'")
+        if stored_theme and stored_theme in THEMES:
+            global CURRENT_ACTIVE_THEME
+            CURRENT_ACTIVE_THEME = stored_theme
+            logging.info(f"Loaded active community theme from database: {CURRENT_ACTIVE_THEME}")
+
         logging.info("Database tables setup complete.")
 
 # --- Health Check ---
@@ -310,9 +455,14 @@ def create_category_keyboard(selected_categories: Optional[List[str]] = None):
     if selected_categories is None:
         selected_categories = []
     builder = InlineKeyboardBuilder()
-    for category in CATEGORIES:
+    available_cats = get_available_categories()
+    theme = get_current_theme_config()
+    pinned = theme.get("pinned_categories", [])
+
+    for category in available_cats:
         prefix = "✅ " if category in selected_categories else ""
-        builder.button(text=f"{prefix}{category}", callback_data=f"category_{category}")
+        icon = "📌 " if (category in pinned and category not in selected_categories) else ""
+        builder.button(text=f"{prefix}{icon}{category}", callback_data=f"category_{category}")
     builder.adjust(2)
     if 1 <= len(selected_categories) <= MAX_CATEGORIES:
         builder.row(InlineKeyboardButton(text=f"➡️ Done Selecting ({len(selected_categories)}/{MAX_CATEGORIES})", callback_data="category_done"))
@@ -322,7 +472,8 @@ def create_category_keyboard(selected_categories: Optional[List[str]] = None):
     return builder.as_markup()
 
 async def get_comment_reactions_counts(comment_id: int) -> Dict[str, int]:
-    counts = {"notalone": 0, "heard": 0, "support": 0}
+    theme = get_current_theme_config()
+    counts = {k: 0 for k in theme["reactions"].keys()}
     async with db.acquire() as conn:
         rows = await conn.fetch("""
             SELECT reaction_type, COUNT(*) as cnt 
@@ -334,8 +485,9 @@ async def get_comment_reactions_counts(comment_id: int) -> Dict[str, int]:
             rtype = r['reaction_type']
             if rtype in counts:
                 counts[rtype] = int(r['cnt'])
-            elif rtype == 'like':
-                counts['support'] += int(r['cnt'])
+            elif rtype == 'like' and counts:
+                first_key = list(counts.keys())[-1]
+                counts[first_key] += int(r['cnt'])
     return counts
 
 async def get_user_points(user_id: int) -> int:
@@ -353,10 +505,11 @@ async def update_user_points(conn: asyncpg.Connection, user_id: int, delta: int)
 
 async def build_comment_keyboard(comment_id: int, commenter_user_id: int, viewer_user_id: int, confession_owner_id: int):
     counts = await get_comment_reactions_counts(comment_id)
+    theme = get_current_theme_config()
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"🫂 {counts['notalone']}", callback_data=f"react_notalone_{comment_id}")
-    builder.button(text=f"🕯️ {counts['heard']}", callback_data=f"react_heard_{comment_id}")
-    builder.button(text=f"❤️ {counts['support']}", callback_data=f"react_support_{comment_id}")
+    for r_type, r_meta in theme["reactions"].items():
+        cnt = counts.get(r_type, 0)
+        builder.button(text=f"{r_meta['emoji']} {cnt}", callback_data=f"react_{r_type}_{comment_id}")
     builder.button(text="↪️ Reply", callback_data=f"reply_{comment_id}")
     builder.button(text="⚠️", callback_data=f"report_confirm_{comment_id}")
 
@@ -645,8 +798,12 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                 builder.button(text=f"📜 Browse Reflections ({comm_count})", callback_data=f"browse_{conf_id}")
                 builder.adjust(1, 1)
 
+                theme = get_current_theme_config()
+                channel_header = theme["header_branding"]
+                header_text = f"<b>{channel_header} #{conf_id}</b>"
+
                 if conf_data['photo_file_id']:
-                    caption = f"<b>Confession #{conf_id}</b>\n\n{prompt_line}{html.quote(conf_data['text'])}\n\n{category_tags}"
+                    caption = f"{header_text}\n\n{prompt_line}{html.quote(conf_data['text'])}\n\n{category_tags}"
                     if len(caption) > 1024:
                         caption = caption[:1020] + "..."
                     await bot.send_photo(
@@ -656,7 +813,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                         reply_markup=builder.as_markup()
                     )
                 else:
-                    txt = f"<b>Confession #{conf_id}</b>\n\n{prompt_line}{html.quote(conf_data['text'])}\n\n{category_tags}"
+                    txt = f"{header_text}\n\n{prompt_line}{html.quote(conf_data['text'])}\n\n{category_tags}"
                     await message.answer(txt, reply_markup=builder.as_markup())
                 return
             except (ValueError, IndexError): 
@@ -665,19 +822,34 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                 logging.error(f"Err handling deep link '{deep_link_args}': {e}", exc_info=True)
                 await message.answer("Error processing link.")
 
+    theme = get_current_theme_config()
     tag, theme_title, theme_desc = get_today_theme()
     _, prompt_text = get_today_prompt()
 
+    # Dynamic theme welcome message header
+    if theme["id"] == "enkutatash_2019":
+        welcome_header = (
+            "🌼✨ <b>መልካም አዲስ ዓመት 2019!</b> ✨🌼\n"
+            "<b>MWU Confession Vault | Enkutatash 2019 Edition</b>\n\n"
+            "💛 <i>As the golden Adey Abeba blooms across Ethiopia, may 2019 bring you peace, fresh starts, and forgiveness. "
+            "Leave behind 2018's burdens, unspoken regrets, and silent tears. Share your truth and embrace new beginnings "
+            "with 100% cryptographic anonymity.</i>\n\n"
+        )
+    else:
+        welcome_header = f"🏛️ <b>{theme.get('welcome_title', 'Anonymous Confession Vault')}</b>\n\n"
+
+    empathy_reactions_str = ", ".join(r['emoji'] for r in theme['reactions'].values())
+
     welcome_text = (
-        f"🏛️ <b>Anonymous Confession Vault</b>\n\n"
-        f"📅 <b>Today's Community Theme:</b> <b>{theme_title}</b> ({tag})\n"
+        f"{welcome_header}"
+        f"📅 <b>Active Community Theme:</b> <b>{theme_title}</b> ({tag})\n"
         f"<i>{theme_desc}</i>\n\n"
         f"💡 <b>Today's Reflection Prompt:</b>\n"
         f"<i>\"{prompt_text}\"</i>\n\n"
         f"🔒 <b>Zero-Identity Vault Active:</b>\n"
         f"• 100% anonymous — your Telegram handle is never shown.\n"
         f"• Zero tolerance for doxxing, real names, or phone numbers.\n"
-        f"• React with emotional micro-interactions (🫂, 🕯️, ❤️) to support peers.\n\n"
+        f"• React with emotional micro-interactions ({empathy_reactions_str}) to support peers.\n\n"
         f"<b>Commands:</b>\n"
         f"• /confess - Share a secret or reflection\n"
         f"• /prompt - View or answer today's prompt\n"
@@ -949,6 +1121,104 @@ async def handle_admin_reply(message: types.Message, state: FSMContext):
         await message.reply("✅ Reply sent to the user.")
     else: 
         await message.reply("⚠️ Failed to send reply. User may have blocked the bot.")
+
+
+# --- Admin Dynamic Theme Management System ---
+@dp.message(Command("settheme"))
+async def admin_set_theme_command(message: types.Message, command: Optional[CommandObject] = None):
+    if not message.from_user or message.from_user.id != ADMIN_ID:
+        return
+
+    arg = (command.args or "").strip().lower() if command else ""
+    alias_map = {
+        "default": "default",
+        "standard": "default",
+        "newyear": "enkutatash_2019",
+        "enkutatash": "enkutatash_2019",
+        "enkutatash_2019": "enkutatash_2019",
+        "exam": "exam_season",
+        "exam_season": "exam_season",
+        "crush": "crush_romance",
+        "crush_romance": "crush_romance",
+        "romance": "crush_romance"
+    }
+
+    if arg and arg in alias_map:
+        target_theme = alias_map[arg]
+        await set_active_theme(target_theme)
+        t_conf = THEMES[target_theme]
+        await message.reply(
+            f"✅ <b>Active Theme Switched to:</b> {t_conf['name']}\n"
+            f"<b>Header Branding:</b> <code>{t_conf['header_branding']}</code>\n"
+            f"<b>Active Tag:</b> {t_conf['tag']}\n"
+            f"<b>Reactions:</b> {' '.join(r['emoji'] for r in t_conf['reactions'].values())}\n"
+            f"<b>Pinned Categories:</b> {', '.join(t_conf.get('pinned_categories', [])) or 'None'}"
+        )
+        return
+
+    current_theme = await get_active_theme()
+    builder = InlineKeyboardBuilder()
+    for t_id, t_conf in THEMES.items():
+        is_active = (t_id == current_theme)
+        check = "✅ " if is_active else ""
+        builder.button(
+            text=f"{check}{t_conf['menu_label']}",
+            callback_data=f"set_theme_{t_id}"
+        )
+    builder.adjust(1)
+
+    curr_conf = THEMES.get(current_theme, THEMES["default"])
+    text_msg = (
+        "🎨 <b>Admin Dynamic Theme Management System</b>\n\n"
+        f"<b>Current Active Theme:</b> {curr_conf['name']}\n"
+        f"<b>Header Branding:</b> <code>{curr_conf['header_branding']}</code>\n"
+        f"<b>Active Tag:</b> {curr_conf['tag']}\n"
+        f"<b>Reactions:</b> {' '.join(r['emoji'] for r in curr_conf['reactions'].values())}\n"
+        f"<b>Pinned Categories:</b> {', '.join(curr_conf.get('pinned_categories', [])) or 'None (Default list)'}\n\n"
+        "<i>Select a community theme below to instantly switch the bot's global branding, channel headers, welcome greeting, and categories:</i>"
+    )
+    await message.answer(text_msg, reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data.startswith("set_theme_"))
+async def handle_theme_selection_callback(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer("Unauthorized.", show_alert=True)
+        return
+
+    selected_theme_id = callback_query.data.replace("set_theme_", "")
+    if selected_theme_id not in THEMES:
+        await callback_query.answer("Theme not found.", show_alert=True)
+        return
+
+    await set_active_theme(selected_theme_id)
+    t_conf = THEMES[selected_theme_id]
+
+    builder = InlineKeyboardBuilder()
+    for t_id, tc in THEMES.items():
+        is_active = (t_id == selected_theme_id)
+        check = "✅ " if is_active else ""
+        builder.button(
+            text=f"{check}{tc['menu_label']}",
+            callback_data=f"set_theme_{t_id}"
+        )
+    builder.adjust(1)
+
+    updated_text = (
+        "🎨 <b>Admin Dynamic Theme Management System</b>\n\n"
+        f"🎉 <b>Active Theme Successfully Updated to:</b> {t_conf['name']}\n\n"
+        f"🌼 <b>Header Branding:</b> <code>{t_conf['header_branding']}</code>\n"
+        f"🏷️ <b>Active Tag:</b> {t_conf['tag']}\n"
+        f"💛 <b>Empathy Reactions:</b> {' '.join(r['emoji'] for r in t_conf['reactions'].values())}\n"
+        f"📌 <b>Pinned Categories:</b> {', '.join(t_conf.get('pinned_categories', [])) or 'None (Default list)'}\n\n"
+        f"<i>All channel posts, welcome greetings (/start), and confession category pickers are now actively branded!</i>"
+    )
+
+    try:
+        await callback_query.message.edit_text(updated_text, reply_markup=builder.as_markup())
+    except TelegramBadRequest:
+        pass
+
+    await callback_query.answer(f"Switched theme to {t_conf['name']}!", show_alert=True)
 
 @dp.message(Command("id"))
 async def get_user_info_command(message: types.Message, command: CommandObject):
@@ -1324,7 +1594,8 @@ async def handle_category_selection(callback_query: types.CallbackQuery, state: 
         )
         await callback_query.answer(); return
     category = action
-    if category in CATEGORIES:
+    available_cats = get_available_categories()
+    if category in available_cats:
         if category in selected_categories: selected_categories.remove(category)
         elif len(selected_categories) < MAX_CATEGORIES: selected_categories.append(category)
         else: await callback_query.answer(f"You can only select up to {MAX_CATEGORIES} categories.", show_alert=True); return
@@ -1463,8 +1734,12 @@ async def handle_approve_confession(callback_query: types.CallbackQuery):
         ]])
         prompt_line = f"💡 <b>Prompt:</b> <i>\"{html.quote(conf['prompt_text'])}\"</i>\n\n" if conf.get('prompt_text') else ""
 
+        theme = get_current_theme_config()
+        channel_header = theme["header_branding"]
+        header_text = f"<b>{channel_header} #{conf['id']}</b>"
+
         if conf['photo_file_id']:
-            channel_caption = f"<b>Confession #{conf['id']}</b>\n\n{prompt_line}{html.quote(conf['text'])}\n\n{category_tags}"
+            channel_caption = f"{header_text}\n\n{prompt_line}{html.quote(conf['text'])}\n\n{category_tags}"
             if len(channel_caption) > 1024:
                 channel_caption = channel_caption[:1020] + "..."
             msg = await bot.send_photo(
@@ -1474,7 +1749,7 @@ async def handle_approve_confession(callback_query: types.CallbackQuery):
                 reply_markup=channel_kbd
             )
         else:
-            channel_post_text = f"<b>Confession #{conf['id']}</b>\n\n{prompt_line}{html.quote(conf['text'])}\n\n{category_tags}"
+            channel_post_text = f"{header_text}\n\n{prompt_line}{html.quote(conf['text'])}\n\n{category_tags}"
             msg = await bot.send_message(chat_id=CHANNEL_ID, text=channel_post_text, reply_markup=channel_kbd)
         
         async with db.acquire() as conn:
@@ -1732,7 +2007,7 @@ async def handle_reaction(callback_query: types.CallbackQuery):
     r_type = parts[1]
     comm_id = int(parts[2])
     user_id = callback_query.from_user.id
-    meta = EMOTIONAL_REACTIONS.get(r_type, {"emoji": "❤️", "label": "Support"})
+    meta = get_reaction_meta(r_type)
     point_delta, alert = 0, ""
 
     async with db.acquire() as conn:
@@ -1963,6 +2238,7 @@ async def main():
             types.BotCommand(command="cancel", description="Cancel current action"),
         ]
         admin_commands = commands + [
+            types.BotCommand(command="settheme", description="ADMIN: Dynamic Community Theme Switcher"),
             types.BotCommand(command="postprompt", description="ADMIN: Post daily prompt to channel"),
             types.BotCommand(command="id", description="ADMIN: Get user info"),
             types.BotCommand(command="warn", description="ADMIN: Warn a user"),
