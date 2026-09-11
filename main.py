@@ -773,7 +773,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                     f"🔒 <b>Zero-Identity Vault Active:</b> Your identity remains 100% anonymous.\n\n"
                     f"✍️ <b>Type your honest confession now:</b>\n"
                     f"• Text confession (up to {MAX_TEXT_CONFESSION_LEN} characters)\n"
-                    f"• Photo with caption (photo <= {MAX_PHOTO_SIZE_MB}MB, caption <= {MAX_PHOTO_CAPTION_LEN} characters)\n\n"
+                    f"• Photo with caption (photo up to {MAX_PHOTO_SIZE_MB}MB, caption up to {MAX_PHOTO_CAPTION_LEN} characters)\n\n"
                     f"Type /cancel to abort.",
                     reply_markup=ReplyKeyboardRemove()
                 )
@@ -853,7 +853,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
         f"📅 <b>Active Community Theme:</b> <b>{theme_title}</b> ({tag})\n"
         f"<i>{theme_desc}</i>\n\n"
         f"💡 <b>Today's Reflection Prompt:</b>\n"
-        f"<i>\"{prompt_text}\"</i>\n\n"
+        f"<i>\"{html.quote(prompt_text)}\"</i>"
         f"🔒 <b>Zero-Identity Vault Active:</b>\n"
         f"• 100% anonymous — your Telegram handle is never shown.\n"
         f"• Zero tolerance for doxxing, real names, or phone numbers.\n"
@@ -886,7 +886,7 @@ async def show_daily_prompt(message: types.Message):
     tag, theme_title, _ = get_today_theme()
     msg = (
         f"💡 <b>Today's Low-Friction Prompt</b> ({tag})\n\n"
-        f"<i>\"{p_text}\"</i>\n\n"
+        f"<i>\"{html.quote(p_text)}\"</i>"
         f"Have a story or secret about this? Share it anonymously in one tap."
     )
     markup = InlineKeyboardMarkup(inline_keyboard=[
@@ -902,7 +902,7 @@ async def shuffle_prompt(callback_query: types.CallbackQuery):
     p_text = DAILY_PROMPTS[idx]
     msg = (
         f"💡 <b>Inspiration Prompt #{idx+1}</b>\n\n"
-        f"<i>\"{p_text}\"</i>\n\n"
+        f"<i>\"{html.quote(p_text)}\"</i>"
         f"Share your reflection or story below:"
     )
     markup = InlineKeyboardMarkup(inline_keyboard=[
@@ -930,7 +930,7 @@ async def answer_prompt_callback(callback_query: types.CallbackQuery, state: FSM
         f"🔒 <b>Zero-Identity Vault Active:</b> Your personal identifiers are stripped.\n\n"
         f"✍️ <b>Send your confession now:</b>\n"
         f"• Plain text (up to {MAX_TEXT_CONFESSION_LEN} characters)\n"
-        f"• Photo with caption (photo <= {MAX_PHOTO_SIZE_MB}MB, caption <= {MAX_PHOTO_CAPTION_LEN} characters)\n\n"
+        f"• Photo with caption (photo up to {MAX_PHOTO_SIZE_MB}MB, caption up to {MAX_PHOTO_CAPTION_LEN} characters)\n\n"
         f"Type /cancel at any point to abort.",
         reply_markup=None
     )
@@ -944,7 +944,7 @@ async def admin_post_prompt_to_channel(message: types.Message):
 
     channel_text = (
         f"💡 <b>DAILY REFLECTION PROMPT</b> • {tag}\n\n"
-        f"<i>\"{p_text}\"</i>\n\n"
+        f"<i>\"{html.quote(p_text)}\"</i>"
         f"Tap the button below to share your honest, completely anonymous story in our safe vault 👇"
     )
     link = f"https://t.me/{bot_info.username}?start=prompt_{idx}"
