@@ -55,7 +55,15 @@ DAILY_PROMPTS = [
     "What is something you wish you could apologize for, but it's too late?",
     "What is an unspoken truth about student life at our university that nobody admits?",
     "Who is someone you silently miss every single day, and why can't you reach out?",
-    "What was your most humbling experience this semester?"
+    "What was your most humbling experience this semester?",
+    "🤫 በዩኒቨርሲቲ ላይ ማንም እንዲያውቅ የማትፈልገው ምስጢር ምንድነው?",
+    "😂 በዩኒቨርሲቲ ውስጥ ያጋጠመህ በጣም አሳፋሪ ነገር ምንድነው?",
+    "❤️ በMWU የምትወደው ሰው አለ? ለምን እንደምትወደው ንገረን።",
+    "👀 በዩኒቨርሲቲ ላይ ለማድረግ የፈለግከው ነገር ግን ፈርተህ ያልሞከርከው ምንድነው?",
+    "🥂 ለ2019 ራስህን ብቻ የምትሰጠው አንድ ቃል ወይም ተስፋ ምንድነው?",
+    "👀 Nama tokkoof waan itti himuu barbaadde, garuu fuula dura itti himuu hin dandeenye maal dha?",
+    "🫢 Yunivarsiitii kana keessatti namni ati dhoksaatti dinqisiifattu jiraa?",
+    "🥂 Bara 2019f ofiif kee waadaa tokko yoo galtu, waadaan sun maal ta’a?"
 ]
 
 # --- Dynamic Themes System Registry ---
