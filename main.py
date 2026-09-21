@@ -1365,11 +1365,19 @@ def register_music_handlers():
                     channel_msg_id=channel_msg.message_id
                 )
 
-            old_cap = callback_query.message.caption_html or callback_query.message.html_text or ""
-            await callback_query.message.edit_caption(
-                caption=f"{old_cap}\n\n-- ✅ Approved &amp; Posted to Channel --",
-                reply_markup=None
-            )
+            # Safely edit admin message caption without caption_html
+            orig_caption = callback_query.message.caption or ""
+            new_caption = f"{html.quote(orig_caption)}\n\n-- ✅ <b>Approved &amp; Posted to Channel</b> --"
+            if len(new_caption) > 1024:
+                new_caption = new_caption[:1020] + "..."
+
+            try:
+                await callback_query.message.edit_caption(
+                    caption=new_caption,
+                    reply_markup=None
+                )
+            except Exception as edit_err:
+                logging.warning(f"Could not edit admin caption: {edit_err}")
 
             await safe_send_message(
                 sub['user_id'],
@@ -1409,14 +1417,18 @@ def register_music_handlers():
                 rejection_reason="Did not meet channel community guidelines"
             )
 
-        old_cap = callback_query.message.caption_html or callback_query.message.html_text or ""
+        orig_caption = callback_query.message.caption or ""
+        new_caption = f"{html.quote(orig_caption)}\n\n-- ❌ <b>Rejected by Admin</b> --"
+        if len(new_caption) > 1024:
+            new_caption = new_caption[:1020] + "..."
+
         try:
             await callback_query.message.edit_caption(
-                caption=f"{old_cap}\n\n-- ❌ Rejected by Admin --",
+                caption=new_caption,
                 reply_markup=None
             )
-        except TelegramBadRequest:
-            pass
+        except Exception as edit_err:
+            logging.warning(f"Could not edit admin caption: {edit_err}")
 
         await safe_send_message(
             sub['user_id'],
