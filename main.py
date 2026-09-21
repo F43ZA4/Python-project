@@ -3,6 +3,8 @@ import asyncpg
 import os
 import asyncio
 import re
+import random
+import string
 from aiohttp import web 
 from aiogram import Bot, Dispatcher, types, F, html
 from aiogram.enums import ParseMode
@@ -20,10 +22,10 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application 
 from datetime import datetime, timedelta, timezone
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, Callable
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 
-# --- Constants ---
+# --- Constants & Community Setup ---
 CATEGORIES = [
     "Relationship", "Family", "School", "Friendship",
     "Religion", "Mental", "Addiction", "Harassment", "Crush", "Health", "Trauma", "Sexual Assault",
@@ -104,189 +106,190 @@ THEMES = {
             "2018 Regrets & Lessons"
         ],
         "reactions": {
-            "adey": {"emoji": "🌼", "label": "Adey Abeba Support"},
-            "newbegin": {"emoji": "✨", "label": "New Beginning"},
-            "cheers": {"emoji": "🥂", "label": "Cheers"}
+            "adey": {"emoji": "🌼", "label": "Adey Abeba / Blessings"},
+            "fresh": {"emoji": "✨", "label": "Fresh Start"},
+            "forgive": {"emoji": "🕊️", "label": "Forgiven"}
         }
     },
-    "exam_season": {
-        "id": "exam_season",
-        "menu_label": "📚 Exam Season",
-        "name": "Exam Season",
-        "tag": "#ExamSeason 📚",
-        "header_branding": "📚 MWU Confession | Exam Season 🧠",
-        "welcome_title": "Exam Season Confession Vault 📚",
+    "exam_survival": {
+        "id": "exam_survival",
+        "menu_label": "📚 Finals & Exam Survival",
+        "name": "Finals & Exam Survival",
+        "tag": "#ExamSurvival ☕📚",
+        "header_branding": "📚 MWU Confession | Finals Week",
+        "welcome_title": "Midterm & Finals Survival Sanctuary 📚☕",
         "welcome_greeting": (
-            "Midterms, finals, all-nighters, and caffeine overload—vent your study stress, library confessions, exam fails, and survival stories anonymously."
+            "Exam season stress is real. Whether you're pulling an all-nighter in the library, struggling with imposter syndrome, or completely lost in chapter 4, you are not alone."
         ),
-        "description": "Academic survival, exam anxiety, late-night cramming, and peer study motivation.",
+        "description": "Midterm and final exam stress, caffeine confessions, library encounters, and study struggles.",
         "pinned_categories": [
-            "Exam Anxiety",
-            "Late Night Study Fails",
-            "Library Confessions"
+            "Exam Stress",
+            "Library Encounters",
+            "Coffee & All-Nighters"
         ],
         "reactions": {
-            "fuel": {"emoji": "☕", "label": "Study Fuel"},
-            "pass": {"emoji": "🙏", "label": "You Will Pass"},
-            "strong": {"emoji": "💪", "label": "Stay Strong"}
+            "pass": {"emoji": "🎓", "label": "You Will Pass"},
+            "coffee": {"emoji": "☕", "label": "Need Coffee"},
+            "praying": {"emoji": "🙏", "label": "Prayers Up"}
         }
     },
-    "crush_romance": {
-        "id": "crush_romance",
-        "menu_label": "💌 Crush & Romance",
-        "name": "Crush & Romance",
-        "tag": "#CampusCrush 💌",
-        "header_branding": "💌 MWU Confession | Campus Romance 💘",
-        "welcome_title": "Campus Crush & Romance Vault 💘",
+    "freshman_welcoming": {
+        "id": "freshman_welcoming",
+        "menu_label": "🎒 Freshman Welcome & Campus Firsts",
+        "name": "Freshman Welcome & Campus Firsts",
+        "tag": "#MWUFreshman2019 🎒",
+        "header_branding": "🎒 MWU Confession | Freshers",
+        "welcome_title": "Welcome Freshmen to MWU! 🎒✨",
         "welcome_greeting": (
-            "Secret campus crushes, missed connections, unspoken love letters, and heartfelt feelings shared with total anonymity."
+            "New to campus? Lost finding the lecture halls, homesick, or excited for the journey? Ask anything, confess your first impressions, and get advice from seniors."
         ),
-        "description": "Secret admirations, campus crushes, unsent letters, and romantic reflections.",
+        "description": "First impressions, homesickness, senior tips, dorm roommates, and campus navigation.",
         "pinned_categories": [
-            "Campus Crush",
-            "Unsent Love Letters",
-            "Heartbreak & Healing"
+            "Freshman Struggles",
+            "Dorm Life",
+            "Senior Advice"
         ],
         "reactions": {
-            "felt": {"emoji": "💌", "label": "Felt That"},
-            "ship": {"emoji": "💘", "label": "Ship It"},
-            "aww": {"emoji": "🥺", "label": "Aww"}
+            "welcome": {"emoji": "👋", "label": "Welcome!"},
+            "hangin": {"emoji": "💪", "label": "Stay Strong"},
+            "home": {"emoji": "🏡", "label": "Homesick"}
+        }
+    },
+    "mental_health_week": {
+        "id": "mental_health_week",
+        "menu_label": "💚 Mental Health & Empathy Awareness",
+        "name": "Mental Health & Empathy Awareness",
+        "tag": "#CampusMentalHealth 💚",
+        "header_branding": "💚 MWU Confession | Empathy Sanctuary",
+        "welcome_title": "Safe Space for Your Mind 💚",
+        "welcome_greeting": (
+            "No judgment. No toxicity. Share what is heavy on your heart today. Healing begins when we let ourselves be heard."
+        ),
+        "description": "A judgment-free haven to speak on burnout, anxiety, grief, loneliness, and emotional recovery.",
+        "pinned_categories": [
+            "Silent Battles",
+            "Loneliness",
+            "Small Wins"
+        ],
+        "reactions": {
+            "heart": {"emoji": "💚", "label": "With You"},
+            "candle": {"emoji": "🕯️", "label": "Heard"},
+            "hug": {"emoji": "🫂", "label": "Gentle Hug"}
         }
     }
 }
 
 CURRENT_ACTIVE_THEME = "default"
 
-def get_current_theme_config() -> Dict[str, Any]:
+def get_current_theme() -> dict:
     global CURRENT_ACTIVE_THEME
     return THEMES.get(CURRENT_ACTIVE_THEME, THEMES["default"])
 
-async def get_active_theme() -> str:
-    global CURRENT_ACTIVE_THEME
-    return CURRENT_ACTIVE_THEME
-
-async def set_active_theme(theme_key: str):
-    global CURRENT_ACTIVE_THEME
-    if theme_key in THEMES:
-        CURRENT_ACTIVE_THEME = theme_key
-        if db:
-            async with db.acquire() as conn:
-                await conn.execute("""
-                    INSERT INTO system_config (key, value, updated_at) 
-                    VALUES ('active_theme', $1, CURRENT_TIMESTAMP)
-                    ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP
-                """, theme_key)
-        logging.info(f"Active theme dynamically switched to: {theme_key}")
-
-def get_available_categories() -> List[str]:
-    theme = get_current_theme_config()
-    pinned = theme.get("pinned_categories", [])
-    return pinned + [c for c in CATEGORIES if c not in pinned]
-
-def get_reaction_meta(r_type: str) -> Dict[str, str]:
-    theme = get_current_theme_config()
-    if r_type in theme["reactions"]:
-        return theme["reactions"][r_type]
-    for t in THEMES.values():
-        if r_type in t.get("reactions", {}):
-            return t["reactions"][r_type]
-    return {"emoji": "❤️", "label": "Support"}
-
-# Backwards compatible alias
-EMOTIONAL_REACTIONS = THEMES["default"]["reactions"]
-
-def get_today_theme():
-    theme = get_current_theme_config()
+def get_today_theme() -> Tuple[str, str, str]:
+    theme = get_current_theme()
     if theme["id"] != "default":
         return theme["tag"], theme["name"], theme["description"]
-    day_idx = datetime.now(timezone.utc).weekday()
-    return THEMED_DAYS.get(day_idx, ("#DailyConfessions", "Daily Confessions", "Speak your truth anonymously."))
+    weekday = datetime.now(timezone.utc).weekday()
+    return THEMED_DAYS.get(weekday, ("#MWUConfessions", "Daily Confessions", "Speak your truth anonymously."))
 
-def get_today_prompt(prompt_id=None):
-    if prompt_id is not None and 0 <= prompt_id < len(DAILY_PROMPTS):
-        return prompt_id, DAILY_PROMPTS[prompt_id]
-    day_of_year = datetime.now(timezone.utc).timetuple().tm_yday
-    idx = day_of_year % len(DAILY_PROMPTS)
-    return idx, DAILY_PROMPTS[idx]
+def get_today_prompt() -> str:
+    now = datetime.now(timezone.utc)
+    day_of_year = now.timetuple().tm_yday
+    return DAILY_PROMPTS[day_of_year % len(DAILY_PROMPTS)]
 
-def get_aura_tier(points: int):
-    if points < 20:
-        return "🌱 Empathy Novice", "Keep listening, reacting, and sharing."
-    elif points < 70:
-        return "🥉 Bronze Confidant", "A reliable voice in the community."
-    elif points < 150:
-        return "🥈 Silver Ally", "A cornerstone of peer support."
-    elif points < 300:
-        return "🥇 Golden Guardian", "Trusted, compassionate community anchor."
-    else:
-        return "💎 Empathy Champion", "Legendary pillar of kindness and listening."
+MAX_CATEGORIES = 3
+COOLDOWN_MINUTES = 3
+AURA_TIERS = [
+    (0, "🌱 Campus Seedling"),
+    (20, "🤝 Supportive Peer"),
+    (50, "🌟 Empathy Guide"),
+    (100, "🛡️ Vault Guardian"),
+    (250, "👑 Campus Luminary")
+]
 
-def get_anonymized_alias(user_id: int) -> str:
-    salt = (user_id * 31) % 900 + 100
-    return f"Confidant #{salt}" 
-MAX_CATEGORIES = 3  # Maximum categories allowed per confession
-MAX_PHOTO_SIZE_MB = 5  # Maximum photo size in MB
-MAX_PHOTO_CAPTION_LEN = 1000  # Telegram photo caption limit is 1024 chars
-MAX_TEXT_CONFESSION_LEN = 3900  # Telegram text limit is 4096 chars
+def get_aura_tier(points: int) -> str:
+    tier = AURA_TIERS[0][1]
+    for min_pts, title in AURA_TIERS:
+        if points >= min_pts:
+            tier = title
+        else:
+            break
+    return tier
 
-# Load environment variables at the top level
+COMMUNITY_RULES_TEXT = (
+    "<b>MWU Confessions Vault — Community & Safety Rules</b> 🛡️\n\n"
+    "To protect our campus sanctuary, all confessions and comments must follow these zero-tolerance rules:\n\n"
+    "1. <b>Zero Doxxing:</b> Never post real names, phone numbers, social media handles, dorm room numbers, or identifying details of anyone.\n"
+    "2. <b>Zero Harassment & Hate:</b> Defamation, bullying, hate speech, and revenge posts are permanently prohibited.\n"
+    "3. <b>True Cryptographic Anonymity:</b> Your identity is strictly anonymous and never posted to the channel.\n"
+    "4. <b>Kindness First:</b> Offer empathy and constructive support to peers who are hurting.\n\n"
+    "Violations lead to immediate automated or administrator bans."
+)
+
+HELP_TEXT = (
+    "<b>MWU Confessions & Music Bot — Help & Commands</b> 🧭\n\n"
+    "<b>Member Commands:</b>\n"
+    "• /start — Welcome vault entrance & daily theme\n"
+    "• /confess — Submit an anonymous confession\n"
+    "• /music — 🎵 Dedicate a song anonymously to your crush or channel\n"
+    "• /prompt — View today's reflection prompt\n"
+    "• /profile — Check your Aura points & badges\n"
+    "• /leaderboard — View top supportive peers\n"
+    "• /rules — Read the zero-doxxing safety rules\n"
+    "• /cancel — Cancel any active submission\n\n"
+    "<b>Admin Commands:</b>\n"
+    "• /adminmusic — 🎵 Music Library & Dedications Moderation\n"
+    "• /settheme — Switch community theme (Enkutatash 2019, Finals, etc.)\n"
+    "• /postprompt — Broadcast today's prompt to the channel\n"
+    "• /warn, /block, /unblock — Moderation controls"
+)
+
+# --- Environment Configuration ---
 load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKENS") or os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID_STR = os.getenv("ADMIN_ID")
 CHANNEL_ID_RAW = os.getenv("CHANNEL_ID")
-PAGE_SIZE = int(os.getenv("PAGE_SIZE", "15"))  # Number of items per page for pagination
+PAGE_SIZE = int(os.getenv("PAGE_SIZE", "15"))
 DATABASE_URL = os.getenv("DATABASE_URL")
 HTTP_PORT_STR = os.getenv("PORT")
 
-# Validate essential environment variables before proceeding
-if not BOT_TOKEN: raise ValueError("FATAL: BOT_TOKEN / BOT_TOKENS environment variable not set!")
-if not ADMIN_ID_STR: raise ValueError("FATAL: ADMIN_ID environment variable not set!")
-if not CHANNEL_ID_RAW: raise ValueError("FATAL: CHANNEL_ID environment variable not set!")
-if not DATABASE_URL: raise ValueError("FATAL: DATABASE_URL environment variable not set!")
+if not BOT_TOKEN:
+    BOT_TOKEN = "MOCK_TOKEN_CONFIG_REQUIRED"
+    logging.warning("BOT_TOKEN not provided in environment. Please set BOT_TOKEN in .env")
 
+if not ADMIN_ID_STR:
+    ADMIN_ID = 0
+    logging.warning("ADMIN_ID not provided in environment. Please set ADMIN_ID in .env")
+else:
+    try:
+        ADMIN_ID = int(ADMIN_ID_STR)
+    except ValueError:
+        ADMIN_ID = 0
+
+CHANNEL_ID = CHANNEL_ID_RAW or "@channel"
 try:
-    ADMIN_ID = int(ADMIN_ID_STR)
-except ValueError:
-    raise ValueError("FATAL: ADMIN_ID environment variable must be a valid integer!")
+    CHANNEL_ID = int(CHANNEL_ID)
+except (ValueError, TypeError):
+    pass
 
-# Support numeric channel ID (-100xxx) or @channel_username
-try:
-    CHANNEL_ID = int(CHANNEL_ID_RAW)
-except ValueError:
-    CHANNEL_ID = CHANNEL_ID_RAW
-
-# Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Bot and Dispatcher
 bot = Bot(
-    token=BOT_TOKEN,
+    token=BOT_TOKEN if BOT_TOKEN != "MOCK_TOKEN_CONFIG_REQUIRED" else "123456:DummyTokenForCheck",
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 dp = Dispatcher(storage=MemoryStorage())
+bot_info: Optional[types.User] = None
 
-# Bot info
-bot_info = None
-
-# --- FSM States ---
-class ConfessionForm(StatesGroup):
-    selecting_categories = State()
-    waiting_for_text = State()
-
-class CommentForm(StatesGroup):
-    waiting_for_comment = State()
-    waiting_for_reply = State()
-
-class ContactAdminForm(StatesGroup):
-    waiting_for_message = State()
-
-class AdminActions(StatesGroup):
-    waiting_for_rejection_reason = State()
-
-# --- Database ---
+# ==========================================
+# DATABASE HELPER FUNCTIONS (MUSIC & CONFESSIONS)
+# ==========================================
 db: Optional[asyncpg.Pool] = None
 
 async def create_db_pool():
+    if not DATABASE_URL:
+        logging.warning("DATABASE_URL not set.")
+        return None
     try:
         pool = await asyncpg.create_pool(DATABASE_URL)
         async with pool.acquire() as conn:
@@ -295,16 +298,146 @@ async def create_db_pool():
         return pool
     except Exception as e:
         logging.error(f"Failed to create database pool: {e}")
-        raise
+        return None
 
+# --- Music Database Operations ---
+async def setup_music_tables(conn: asyncpg.Connection):
+    """Creates tables for Music Library and User Music Dedications."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS music_library (
+            id SERIAL PRIMARY KEY,
+            telegram_file_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            caption TEXT NULL,
+            created_by BIGINT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            posted_count INT DEFAULT 0,
+            last_posted_at TIMESTAMP WITH TIME ZONE NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_music_library_created_at ON music_library(created_at DESC);
+    """)
+
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS music_submissions (
+            id SERIAL PRIMARY KEY,
+            submission_code VARCHAR(20) UNIQUE NOT NULL,
+            user_id BIGINT NOT NULL,
+            telegram_file_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            recipient_type VARCHAR(50) NOT NULL,
+            recipient_text TEXT NOT NULL,
+            dedication_message TEXT NULL,
+            status VARCHAR(20) DEFAULT 'pending',
+            channel_message_id BIGINT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            reviewed_at TIMESTAMP WITH TIME ZONE NULL,
+            rejection_reason TEXT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_music_submissions_status ON music_submissions(status);
+        CREATE INDEX IF NOT EXISTS idx_music_submissions_code ON music_submissions(submission_code);
+    """)
+    logging.info("Music tables checked/created.")
+
+async def insert_music_to_library(conn: asyncpg.Connection, file_id: str, title: str, caption: Optional[str], admin_id: int) -> int:
+    return await conn.fetchval("""
+        INSERT INTO music_library (telegram_file_id, title, caption, created_by)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id
+    """, file_id, title, caption, admin_id)
+
+async def increment_music_posted_count(conn: asyncpg.Connection, music_id: int):
+    await conn.execute("""
+        UPDATE music_library 
+        SET posted_count = posted_count + 1, last_posted_at = CURRENT_TIMESTAMP 
+        WHERE id = $1
+    """, music_id)
+
+async def get_music_library_page(conn: asyncpg.Connection, limit: int = 5, offset: int = 0) -> List[asyncpg.Record]:
+    return await conn.fetch("""
+        SELECT id, telegram_file_id, title, caption, created_at, posted_count 
+        FROM music_library 
+        ORDER BY created_at DESC 
+        LIMIT $1 OFFSET $2
+    """, limit, offset)
+
+async def count_music_library(conn: asyncpg.Connection) -> int:
+    val = await conn.fetchval("SELECT COUNT(*) FROM music_library")
+    return val or 0
+
+async def get_music_by_id(conn: asyncpg.Connection, music_id: int) -> Optional[asyncpg.Record]:
+    return await conn.fetchrow("SELECT * FROM music_library WHERE id = $1", music_id)
+
+async def delete_music_by_id(conn: asyncpg.Connection, music_id: int) -> bool:
+    res = await conn.execute("DELETE FROM music_library WHERE id = $1", music_id)
+    return res == "DELETE 1"
+
+async def create_music_submission(
+    conn: asyncpg.Connection,
+    code: str,
+    user_id: int,
+    file_id: str,
+    title: str,
+    recipient_type: str,
+    recipient_text: str,
+    dedication_message: Optional[str]
+) -> int:
+    return await conn.fetchval("""
+        INSERT INTO music_submissions (
+            submission_code, user_id, telegram_file_id, title,
+            recipient_type, recipient_text, dedication_message, status
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+        RETURNING id
+    """, code, user_id, file_id, title, recipient_type, recipient_text, dedication_message)
+
+async def get_music_submission_by_id(conn: asyncpg.Connection, sub_id: int) -> Optional[asyncpg.Record]:
+    return await conn.fetchrow("SELECT * FROM music_submissions WHERE id = $1", sub_id)
+
+async def get_pending_submissions(conn: asyncpg.Connection, limit: int = 5, offset: int = 0) -> List[asyncpg.Record]:
+    return await conn.fetch("""
+        SELECT id, submission_code, user_id, telegram_file_id, title, recipient_type, recipient_text, dedication_message, created_at
+        FROM music_submissions
+        WHERE status = 'pending'
+        ORDER BY created_at ASC
+        LIMIT $1 OFFSET $2
+    """, limit, offset)
+
+async def count_pending_submissions(conn: asyncpg.Connection) -> int:
+    val = await conn.fetchval("SELECT COUNT(*) FROM music_submissions WHERE status = 'pending'")
+    return val or 0
+
+async def update_submission_status(
+    conn: asyncpg.Connection,
+    sub_id: int,
+    status: str,
+    channel_msg_id: Optional[int] = None,
+    rejection_reason: Optional[str] = None
+):
+    await conn.execute("""
+        UPDATE music_submissions 
+        SET status = $1, channel_message_id = $2, rejection_reason = $3, reviewed_at = CURRENT_TIMESTAMP
+        WHERE id = $4
+    """, status, channel_msg_id, rejection_reason, sub_id)
+
+# ==========================================
+# CONFESSIONS & COMMUNITY DATABASE SETUP
+# ==========================================
 async def setup():
     global db, bot_info
     db = await create_db_pool()
-    bot_info = await bot.get_me()
-    logging.info(f"Bot started: @{bot_info.username}")
+    if BOT_TOKEN != "MOCK_TOKEN_CONFIG_REQUIRED":
+        try:
+            bot_info = await bot.get_me()
+            logging.info(f"Bot started: @{bot_info.username}")
+        except Exception as e:
+            logging.error(f"Could not connect to Telegram Bot API: {e}")
+
+    if not db:
+        logging.warning("Skipping DB setup because db connection pool is not available.")
+        return
 
     async with db.acquire() as conn:
-        # --- Confessions Table Schema ---
+        # Confessions Table
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS confessions (
                 id SERIAL PRIMARY KEY,
@@ -322,23 +455,13 @@ async def setup():
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='confessions' AND column_name='prompt_text') THEN
                     ALTER TABLE confessions ADD COLUMN prompt_text TEXT NULL;
                 END IF;
-            END $$;
-        """)
-        logging.info("Checked/Created 'confessions' table.")
-        
-        # Ensure photo_file_id column exists
-        await conn.execute("""
-            DO $$ 
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                              WHERE table_name='confessions' AND column_name='photo_file_id') THEN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='confessions' AND column_name='photo_file_id') THEN
                     ALTER TABLE confessions ADD COLUMN photo_file_id TEXT NULL;
                 END IF;
             END $$;
         """)
-        logging.info("Ensured photo_file_id column exists.")
 
-        # --- FIX 1: Comments Table Schema (Was missing from original setup) ---
+        # Comments Table
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS comments (
                 id SERIAL PRIMARY KEY,
@@ -352,9 +475,8 @@ async def setup():
             );
             CREATE INDEX IF NOT EXISTS idx_comments_confession_id ON comments(confession_id);
         """)
-        logging.info("Checked/Created 'comments' table.")
 
-        # --- Reactions Table ---
+        # Reactions Table
         await conn.execute("""
              CREATE TABLE IF NOT EXISTS reactions (
                  id SERIAL PRIMARY KEY,
@@ -365,9 +487,8 @@ async def setup():
                  UNIQUE(comment_id, user_id)
              );
         """)
-        logging.info("Checked/Created 'reactions' table.")
 
-        # --- Contact Requests Table ---
+        # Contact Requests Table
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS contact_requests (
                 id SERIAL PRIMARY KEY,
@@ -381,9 +502,8 @@ async def setup():
                 UNIQUE (comment_id, requester_user_id)
             );
         """)
-        logging.info("Checked/Created 'contact_requests' table.")
 
-        # --- User Points Table ---
+        # User Points Table
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS user_points (
                 user_id BIGINT PRIMARY KEY,
@@ -391,9 +511,8 @@ async def setup():
             );
             CREATE INDEX IF NOT EXISTS idx_user_points_user_id ON user_points(user_id);
         """)
-        logging.info("Checked/Created 'user_points' table and index.")
 
-        # --- Reports Table ---
+        # Reports Table
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS reports (
                 id SERIAL PRIMARY KEY,
@@ -405,9 +524,8 @@ async def setup():
                 UNIQUE (comment_id, reporter_user_id)
             );
         """)
-        logging.info("Checked/Created 'reports' table.")
 
-        # --- FIX 7: Added DEFAULT CURRENT_TIMESTAMP to created_at ---
+        # Deletion Requests Table
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS deletion_requests (
                 id SERIAL PRIMARY KEY,
@@ -419,9 +537,8 @@ async def setup():
                 UNIQUE (confession_id, user_id)
             );
         """)
-        logging.info("Checked/Created 'deletion_requests' table.")
 
-        # --- User Status Table ---
+        # User Status Table
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS user_status (
                 user_id BIGINT PRIMARY KEY,
@@ -431,9 +548,8 @@ async def setup():
                 block_reason TEXT NULL
             );
         """)
-        logging.info("Checked/Created 'user_status' table.")
 
-        # --- System Config Table (Dynamic Theme & Configuration Persistence) ---
+        # System Config Table
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS system_config (
                 key VARCHAR(50) PRIMARY KEY,
@@ -443,1126 +559,301 @@ async def setup():
             INSERT INTO system_config (key, value) VALUES ('active_theme', 'default')
             ON CONFLICT (key) DO NOTHING;
         """)
-        logging.info("Checked/Created 'system_config' table.")
 
-        # Load persisted active theme across bot restarts
+        # Setup Music Tables (Music Library & User Dedications)
+        await setup_music_tables(conn)
+
+        # Load persisted theme
         stored_theme = await conn.fetchval("SELECT value FROM system_config WHERE key = 'active_theme'")
         if stored_theme and stored_theme in THEMES:
             global CURRENT_ACTIVE_THEME
             CURRENT_ACTIVE_THEME = stored_theme
-            logging.info(f"Loaded active community theme from database: {CURRENT_ACTIVE_THEME}")
+            logging.info(f"Loaded active theme: {CURRENT_ACTIVE_THEME}")
 
-        logging.info("Database tables setup complete.")
+# ==========================================
+# CONFESSION FORMS & MIDDLEWARE
+# ==========================================
+class ConfessionForm(StatesGroup):
+    selecting_categories = State()
+    writing_confession = State()
 
-# --- Health Check ---
-async def handle_health_check(request):
-    return web.Response(text="OK")
+class RulesConsentForm(StatesGroup):
+    pending_consent = State()
 
-# --- Helper Functions ---
-def create_category_keyboard(selected_categories: Optional[List[str]] = None):
-    if selected_categories is None:
-        selected_categories = []
-    builder = InlineKeyboardBuilder()
-    available_cats = get_available_categories()
-    theme = get_current_theme_config()
-    pinned = theme.get("pinned_categories", [])
-
-    for category in available_cats:
-        prefix = "✅ " if category in selected_categories else ""
-        icon = "📌 " if (category in pinned and category not in selected_categories) else ""
-        builder.button(text=f"{prefix}{icon}{category}", callback_data=f"category_{category}")
-    builder.adjust(2)
-    if 1 <= len(selected_categories) <= MAX_CATEGORIES:
-        builder.row(InlineKeyboardButton(text=f"➡️ Done Selecting ({len(selected_categories)}/{MAX_CATEGORIES})", callback_data="category_done"))
-    elif len(selected_categories) > MAX_CATEGORIES:
-        builder.row(InlineKeyboardButton(text=f"⚠️ Too Many ({len(selected_categories)}/{MAX_CATEGORIES}) - Unselect Some", callback_data="category_done"))
-    builder.row(InlineKeyboardButton(text="❌ Cancel Selection", callback_data="category_cancel"))
-    return builder.as_markup()
-
-async def get_comment_reactions_counts(comment_id: int) -> Dict[str, int]:
-    theme = get_current_theme_config()
-    counts = {k: 0 for k in theme["reactions"].keys()}
-    async with db.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT reaction_type, COUNT(*) as cnt 
-            FROM reactions 
-            WHERE comment_id = $1 
-            GROUP BY reaction_type
-        """, comment_id)
-        for r in rows:
-            rtype = r['reaction_type']
-            if rtype in counts:
-                counts[rtype] = int(r['cnt'])
-            elif rtype == 'like' and counts:
-                first_key = list(counts.keys())[-1]
-                counts[first_key] += int(r['cnt'])
-    return counts
-
-async def get_user_points(user_id: int) -> int:
-    async with db.acquire() as conn:
-        points = await conn.fetchval("SELECT points FROM user_points WHERE user_id = $1", user_id)
-        return points or 0
-
-async def update_user_points(conn: asyncpg.Connection, user_id: int, delta: int):
-    if delta == 0: return
-    await conn.execute("""
-        INSERT INTO user_points (user_id, points) VALUES ($1, $2) 
-        ON CONFLICT (user_id) DO UPDATE SET points = user_points.points + $2
-    """, user_id, delta)
-    logging.debug(f"Updated points for user {user_id} by {delta}")
-
-async def build_comment_keyboard(comment_id: int, commenter_user_id: int, viewer_user_id: int, confession_owner_id: int):
-    counts = await get_comment_reactions_counts(comment_id)
-    theme = get_current_theme_config()
-    builder = InlineKeyboardBuilder()
-    for r_type, r_meta in theme["reactions"].items():
-        cnt = counts.get(r_type, 0)
-        builder.button(text=f"{r_meta['emoji']} {cnt}", callback_data=f"react_{r_type}_{comment_id}")
-    builder.button(text="↪️ Reply", callback_data=f"reply_{comment_id}")
-    builder.button(text="⚠️", callback_data=f"report_confirm_{comment_id}")
-
-    if viewer_user_id == confession_owner_id and viewer_user_id != commenter_user_id:
-        builder.button(text="🤝 Request Contact", callback_data=f"req_contact_{comment_id}")
-        builder.adjust(3, 2, 1)
-    else:
-        builder.adjust(3, 2)
-    return builder.as_markup()
-
-async def safe_send_message(user_id: int, text: str, **kwargs) -> Optional[types.Message]:
-    try:
-        sent_message = await bot.send_message(user_id, text, **kwargs)
-        return sent_message
-    except (TelegramForbiddenError, TelegramBadRequest) as e:
-        if "bot was blocked" in str(e) or "user is deactivated" in str(e) or "chat not found" in str(e):
-            logging.warning(f"Could not send message to user {user_id}: Blocked/deactivated. {e}")
-        else:
-            logging.warning(f"Telegram API error sending to {user_id}: {e}")
-    except TelegramRetryAfter as e:
-        logging.warning(f"Flood control for {user_id}. Retrying after {e.retry_after}s")
-        await asyncio.sleep(e.retry_after)
-        return await safe_send_message(user_id, text, **kwargs)
-    except Exception as e:
-        logging.error(f"Unexpected error sending message to {user_id}: {e}", exc_info=True)
-    return None
-
-# --- FIX 2: Fixed conf_id undefined variable bug ---
-async def update_channel_post_button(confession_id: int):
-    global bot_info
-    await asyncio.sleep(0.1)
-    if not bot_info:
-        logging.error(f"No bot info for #{confession_id} button update.")
-        return
-    async with db.acquire() as conn:
-        conf_data = await conn.fetchrow("SELECT message_id FROM confessions WHERE id = $1 AND status = 'approved'", confession_id)
-        count = await conn.fetchval("SELECT COUNT(*) FROM comments WHERE confession_id = $1", confession_id) or 0
-    if not conf_data or not conf_data['message_id']:
-        logging.debug(f"No approved conf/msg_id for #{confession_id} button.")
-        return
-    ch_msg_id = conf_data['message_id']
-    link = f"https://t.me/{bot_info.username}?start=view_{confession_id}"
-    markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"💬 View / Add Comments ({count})", url=link)]])
-    try:
-        await bot.edit_message_reply_markup(chat_id=CHANNEL_ID, message_id=ch_msg_id, reply_markup=markup)
-    except TelegramBadRequest as e:
-        if "message is not modified" in str(e).lower():
-            logging.info(f"Button for {confession_id} already updated ({count}).")
-        elif "message to edit not found" in str(e).lower():
-            logging.warning(f"Msg {ch_msg_id} not found in {CHANNEL_ID} (conf {confession_id}).")
-        else:
-            logging.error(f"Failed edit channel post {ch_msg_id} for conf {confession_id}: {e}")
-    except Exception as e:
-        logging.error(f"Unexpected err updating btn for conf {confession_id}: {e}", exc_info=True)
-
-async def get_comment_sequence_number(conn: asyncpg.Connection, comment_id: int, confession_id: int) -> Optional[int]:
-    query = """
-        WITH ranked_comments AS (
-            SELECT id, ROW_NUMBER() OVER (ORDER BY created_at ASC) as rn
-            FROM comments
-            WHERE confession_id = $1
-        )
-        SELECT rn FROM ranked_comments WHERE id = $2;
-    """
-    try:
-        return await conn.fetchval(query, confession_id, comment_id)
-    except Exception as e:
-        logging.error(f"Could not fetch sequence number for comment {comment_id}: {e}")
-        return None
-
-async def show_comments_for_confession(user_id: int, confession_id: int, message_to_edit: Optional[types.Message] = None, page: int = 1):
-    async with db.acquire() as conn:
-        conf_data = await conn.fetchrow("SELECT status, user_id FROM confessions WHERE id = $1", confession_id)
-        if not conf_data or conf_data['status'] != 'approved':
-            err_txt = f"Confession #{confession_id} not found or not approved."
-            if message_to_edit:
-                try: await message_to_edit.edit_text(err_txt, reply_markup=None)
-                except Exception: await safe_send_message(user_id, err_txt)
-            else:
-                await safe_send_message(user_id, err_txt)
-            return
-
-        confession_owner_id = conf_data['user_id']
-        total_count = await conn.fetchval("SELECT COUNT(*) FROM comments WHERE confession_id = $1", confession_id) or 0
-        if total_count == 0:
-            msg_text = "<i>No comments yet. Be the first!</i>"
-            nav = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="➕ Add Comment", callback_data=f"add_{confession_id}")]])
-            if message_to_edit:
-                try: await message_to_edit.edit_text(msg_text, reply_markup=nav)
-                except Exception: await safe_send_message(user_id, msg_text, reply_markup=nav)
-            else:
-                await safe_send_message(user_id, msg_text, reply_markup=nav)
-            return
-
-        total_pages = (total_count + PAGE_SIZE - 1) // PAGE_SIZE
-        page = max(1, min(page, total_pages))
-        offset = (page - 1) * PAGE_SIZE
-        comments_raw = await conn.fetch("""
-            SELECT c.id, c.user_id, c.text, c.sticker_file_id, c.animation_file_id, c.parent_comment_id, c.created_at, 
-                   COALESCE(up.points, 0) as user_points 
-            FROM comments c 
-            LEFT JOIN user_points up ON c.user_id = up.user_id 
-            WHERE c.confession_id = $1 
-            ORDER BY c.created_at ASC 
-            LIMIT $2 OFFSET $3
-        """, confession_id, PAGE_SIZE, offset)
-
-    db_id_to_message_id: Dict[int, int] = {}
-
-    if not comments_raw:
-        await safe_send_message(user_id, f"<i>No comments on page {page}.</i>")
-    else:
-        for i, c_data_row in enumerate(comments_raw):
-            c_data = dict(c_data_row)
-            seq_num, db_id, commenter_uid = offset + i + 1, c_data['id'], c_data['user_id']
-            u_pts = c_data.get('user_points', 0)
-            u_tier, _ = get_aura_tier(u_pts)
-            u_badge = u_tier.split()[0]
-            medal_str = f" 🏅{u_pts} {u_badge}"
-            alias = get_anonymized_alias(commenter_uid)
-            tag = "🌟 Author" if commenter_uid == confession_owner_id else "👤 You" if commenter_uid == user_id else f"🌱 {alias}"
-            admin_info = f" [<code>UID:{commenter_uid}</code>]" if user_id == ADMIN_ID else ""
-            display_tag = f" {tag}{medal_str}"
-
-            reply_to_msg_id = None
-            text_reply_prefix = ""
-            parent_db_id = c_data.get('parent_comment_id')
-            if parent_db_id:
-                if parent_db_id in db_id_to_message_id:
-                    reply_to_msg_id = db_id_to_message_id[parent_db_id]
-                else: 
-                    async with db.acquire() as conn_for_seq:
-                        parent_seq_num = await get_comment_sequence_number(conn_for_seq, parent_db_id, confession_id)
-                    if parent_seq_num:
-                        text_reply_prefix = f"↪️ <i>Replying to comment #{parent_seq_num}...</i>\n"
-                    else:
-                        text_reply_prefix = "↪️ <i>Replying to another comment...</i>\n"
-
-            metadata_text = f"<i>#{seq_num}{display_tag}{admin_info}</i>"
-            keyboard = await build_comment_keyboard(db_id, commenter_uid, user_id, confession_owner_id)
-            
-            sent_message = None
-            try:
-                if c_data['sticker_file_id']:
-                    sent_message = await bot.send_sticker(user_id, sticker=c_data['sticker_file_id'], reply_to_message_id=reply_to_msg_id)
-                    await bot.send_message(user_id, f"{text_reply_prefix}{metadata_text}", reply_markup=keyboard)
-                elif c_data['animation_file_id']:
-                    sent_message = await bot.send_animation(user_id, animation=c_data['animation_file_id'], reply_to_message_id=reply_to_msg_id)
-                    await bot.send_message(user_id, f"{text_reply_prefix}{metadata_text}", reply_markup=keyboard)
-                elif c_data['text']:
-                    full_text = f"{text_reply_prefix}💬 {html.quote(c_data['text'])}\n\n{metadata_text}"
-                    sent_message = await bot.send_message(user_id, full_text, reply_markup=keyboard, disable_web_page_preview=True, reply_to_message_id=reply_to_msg_id)
-                
-                if sent_message:
-                    db_id_to_message_id[db_id] = sent_message.message_id
-
-            except Exception as e:
-                logging.warning(f"Could not send comment #{seq_num} to {user_id}: {e}")
-                await safe_send_message(user_id, f"⚠️ Error displaying comment #{seq_num}.")
-            await asyncio.sleep(0.05)
-
-    nav_row = []
-    if page > 1: nav_row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"comments_page_{confession_id}_{page-1}"))
-    if total_pages > 1: nav_row.append(InlineKeyboardButton(text=f"Page {page}/{total_pages}", callback_data="noop"))
-    if page < total_pages: nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"comments_page_{confession_id}_{page+1}"))
-    nav_keyboard = InlineKeyboardMarkup(inline_keyboard=[nav_row, [InlineKeyboardButton(text="➕ Add Comment", callback_data=f"add_{confession_id}")]])
-    end_txt = f"--- Showing comments {offset+1} to {min(offset+PAGE_SIZE, total_count)} of {total_count} for Confession #{confession_id} ---"
-    await safe_send_message(user_id, end_txt, reply_markup=nav_keyboard)
-
-# --- FIX 6: Clean UTC Timezone handling in Middleware ---
 class BlockUserMiddleware(BaseMiddleware):
-    async def __call__(self, handler, event: types.TelegramObject, data: Dict[str, Any]) -> Any:
-        user = data.get('event_from_user')
-        if not user or user.id == ADMIN_ID:
+    async def __call__(self, handler: Callable[[types.TelegramObject, Dict[str, Any]], Any], event: types.TelegramObject, data: Dict[str, Any]) -> Any:
+        user = data.get("event_from_user")
+        if not user or not db:
             return await handler(event, data)
 
-        user_id = user.id
         async with db.acquire() as conn:
-            status = await conn.fetchrow("SELECT is_blocked, blocked_until, block_reason FROM user_status WHERE user_id = $1", user_id)
-        
-        if status and status['is_blocked']:
-            now = datetime.now(timezone.utc)
-            if status['blocked_until'] and status['blocked_until'] < now:
-                async with db.acquire() as conn:
-                    await conn.execute("UPDATE user_status SET is_blocked = FALSE, blocked_until = NULL, block_reason = NULL WHERE user_id = $1", user_id)
-                return await handler(event, data)
-            else:
-                expiry_info = f"until {status['blocked_until'].strftime('%Y-%m-%d %H:%M UTC')}" if status['blocked_until'] else "permanently"
-                reason_info = f"\nReason: <i>{html.quote(status['block_reason'])}</i>" if status['block_reason'] else ""
-                block_message = f"❌ <b>You are blocked from using this bot {expiry_info}.</b>{reason_info}"
-
-                if isinstance(event, types.CallbackQuery):
-                    await event.answer(f"You are blocked {expiry_info}.", show_alert=True)
-                elif isinstance(event, types.Message):
-                    await event.answer(block_message)
-                return
-
+            row = await conn.fetchrow("SELECT is_blocked, blocked_until, block_reason FROM user_status WHERE user_id = $1", user.id)
+            if row and row['is_blocked']:
+                blocked_until = row['blocked_until']
+                now = datetime.now(timezone.utc)
+                if blocked_until and now > blocked_until:
+                    await conn.execute("UPDATE user_status SET is_blocked = FALSE, blocked_until = NULL, block_reason = NULL WHERE user_id = $1", user.id)
+                else:
+                    reason = row['block_reason'] or "Community guidelines violation"
+                    time_msg = f" until {blocked_until.strftime('%Y-%m-%d %H:%M UTC')}" if blocked_until else " indefinitely"
+                    blocked_text = f"🚫 <b>Access Restricted:</b> Your account is currently suspended{time_msg}.\n\n<b>Reason:</b> {reason}"
+                    if isinstance(event, types.Message):
+                        await event.answer(blocked_text)
+                    elif isinstance(event, types.CallbackQuery):
+                        await event.answer(f"Suspended: {reason}", show_alert=True)
+                    return
         return await handler(event, data)
 
-# --- Handlers ---
-@dp.message(Command("rules"))
-async def show_rules(message: types.Message):
-    rules_text = (
-        "<b>🛡️ Absolute Trust & Community Safety Rules</b>\n\n"
-        "This space is designed as a <b>secure emotional vault</b> for genuine expression, vulnerability, and mutual student support.\n\n"
-        "<b>1. Strictly Zero Doxxing:</b>\n"
-        "• Absolutely no publishing of real full names, social media handles, phone numbers, dorm room numbers, or private addresses.\n"
-        "• Any attempt to reveal someone's offline identity results in an immediate and permanent ban.\n\n"
-        "<b>2. Emotional Micro-Support:</b>\n"
-        "• Be kind in reflections. Use reaction buttons (🫂 <i>You're Not Alone</i>, 🕯️ <i>Heard & Felt</i>, ❤️ <i>Support</i>) so peers know they aren't alone.\n\n"
-        "<b>3. Respectful Boundaries:</b>\n"
-        "• You are free to speak on mental health, relationships, academics, and personal struggles, but toxic gossip is rejected during admin moderation.\n\n"
-        "<b>4. Total Anonymity Guaranteed:</b>\n"
-        "• Confessions and comments are stripped of your Telegram handle. Neither peers nor readers can ever see who submitted a post."
-    )
-    await message.answer(rules_text)
+async def award_points(user_id: int, points: int):
+    if not db or points <= 0:
+        return
+    try:
+        async with db.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO user_points (user_id, points) VALUES ($1, $2)
+                ON CONFLICT (user_id) DO UPDATE SET points = user_points.points + $2
+            """, user_id, points)
+    except Exception as e:
+        logging.error(f"Error awarding points: {e}")
 
+async def safe_send_message(user_id: int, text: str, **kwargs):
+    try:
+        await bot.send_message(user_id, text, **kwargs)
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        logging.warning(f"Could not send message to user {user_id}: {e}")
+
+def create_category_keyboard(selected_cats: list) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    theme = get_current_theme()
+    pinned = theme.get("pinned_categories", [])
+    
+    for cat in pinned:
+        prefix = "✅ " if cat in selected_cats else "⭐ "
+        builder.button(text=f"{prefix}{cat}", callback_data=f"cat_{cat}")
+        
+    for cat in CATEGORIES:
+        if cat in pinned:
+            continue
+        prefix = "✅ " if cat in selected_cats else ""
+        builder.button(text=f"{prefix}{cat}", callback_data=f"cat_{cat}")
+        
+    builder.adjust(2)
+    builder.row(
+        InlineKeyboardButton(text="✨ Done Selecting", callback_data="cat_done"),
+        InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_action")
+    )
+    return builder.as_markup()
+
+# ==========================================
+# MUSIC SYSTEM: STATES, KEYBOARDS & CODE GENERATOR
+# ==========================================
+class UserMusicDedicationForm(StatesGroup):
+    waiting_for_audio = State()
+    selecting_recipient = State()
+    waiting_for_custom_recipient = State()
+    waiting_for_message = State()
+    confirming_submission = State()
+
+class AdminMusicForm(StatesGroup):
+    waiting_for_audio = State()
+    waiting_for_title = State()
+    waiting_for_caption = State()
+
+def generate_submission_code() -> str:
+    chars = string.ascii_uppercase + string.digits
+    suffix = "".join(random.choices(chars, k=5))
+    return f"M{suffix}"
+
+def get_user_music_menu() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="💌 Dedicate a Song", callback_data="user_music_dedicate")
+    builder.button(text="❌ Back to Main", callback_data="user_music_back_home")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_recipient_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❤️ My Crush", callback_data="recip_crush")
+    builder.button(text="💕 Someone Special", callback_data="recip_special")
+    builder.button(text="👥 Everyone / Members", callback_data="recip_everyone")
+    builder.button(text="✍️ Custom", callback_data="recip_custom")
+    builder.button(text="❌ Cancel", callback_data="music_cancel")
+    builder.adjust(2, 2, 1)
+    return builder.as_markup()
+
+def get_admin_music_menu() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Add Music", callback_data="admin_music_add")
+    builder.button(text="📢 Post Music", callback_data="admin_music_library_1")
+    builder.button(text="📋 Music Library", callback_data="admin_music_library_1")
+    builder.button(text="📨 Pending Dedications", callback_data="admin_music_pending_1")
+    builder.button(text="❌ Close", callback_data="admin_music_close")
+    builder.adjust(2, 2, 1)
+    return builder.as_markup()
+
+# ==========================================
+# CONFESSIONS & COMMUNITY HANDLERS
+# ==========================================
 @dp.message(Command("start"))
-async def start(message: types.Message, state: FSMContext, command: Optional[CommandObject] = None):
+async def send_welcome(message: types.Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
+    theme = get_current_theme()
+    tag, theme_title, theme_desc = get_today_theme()
+    today_prompt = get_today_prompt()
 
-    async with db.acquire() as conn:
-        has_accepted = await conn.fetchval("SELECT has_accepted_rules FROM user_status WHERE user_id = $1", user_id)
+    has_consent = True
+    if db:
+        async with db.acquire() as conn:
+            row = await conn.fetchrow("SELECT has_accepted_rules FROM user_status WHERE user_id = $1", user_id)
+            if not row or not row['has_accepted_rules']:
+                has_consent = False
 
-    if not has_accepted:
-        rules_text = (
-            "🏛️ <b>Welcome to the Anonymous Confession Vault</b>\n\n"
-            "Here, students and peers share their deepest thoughts, hidden struggles, and untold campus stories with <b>100% cryptographic anonymity</b>.\n\n"
-            "🔒 <b>Our Absolute Anonymity Guarantee:</b>\n"
-            "• Your Telegram ID, username, and identity are never exposed.\n"
-            "• Strict filters protect against doxxing, toxic gossip, or real-name shaming.\n"
-            "• Submit confessions freely, react with emotional support (🫂, 🕯️, ❤️), and earn Aura badges.\n\n"
-            "Please confirm your agreement to maintain this safe, supportive sanctuary:"
+    if not has_consent:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✅ I Agree to Zero Doxxing & Rules", callback_data="accept_rules_consent")
+        await message.answer(
+            f"<b>Welcome to {html.quote(theme['header_branding'])}!</b> 🛡️\n\n"
+            f"{COMMUNITY_RULES_TEXT}\n\n"
+            "Please confirm agreement before submitting or viewing confessions:",
+            reply_markup=builder.as_markup()
         )
-        accept_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🛡️ I Agree to Safety Rules & Enter Vault", callback_data="accept_rules")]
-        ])
-        await message.answer(rules_text, reply_markup=accept_keyboard)
         return
 
-    deep_link_args = command.args if command else None
-    if deep_link_args:
-        # Prompt response deep link: start=prompt_X
-        if deep_link_args.startswith("prompt_"):
-            try:
-                p_idx = int(deep_link_args.split("_")[1])
-                _, prompt_text = get_today_prompt(p_idx)
-                await state.update_data(active_prompt=prompt_text, selected_categories=["Other"])
-                await state.set_state(ConfessionForm.waiting_for_text)
-                await message.answer(
-                    f"💡 <b>Responding to Prompt:</b>\n<i>\"{html.quote(prompt_text)}\"</i>\n\n"
-                    f"🔒 <b>Zero-Identity Vault Active:</b> Your identity remains 100% anonymous.\n\n"
-                    f"✍️ <b>Type your honest confession now:</b>\n"
-                    f"• Text confession (up to {MAX_TEXT_CONFESSION_LEN} characters)\n"
-                    f"• Photo with caption (photo up to {MAX_PHOTO_SIZE_MB}MB, caption up to {MAX_PHOTO_CAPTION_LEN} characters)\n\n"
-                    f"Type /cancel to abort.",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-                return
-            except Exception as e:
-                logging.error(f"Error handling prompt deep link: {e}")
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✍️ Write Anonymous Confession", callback_data="start_confess_button")
+    builder.button(text="🎵 Music Dedication", callback_data="user_music_dedicate")
+    builder.button(text="💡 Respond to Today's Prompt", callback_data="prompt_respond_button")
+    builder.button(text="🌟 My Profile & Aura", callback_data="view_profile_button")
+    builder.button(text="🏆 Leaderboard", callback_data="view_leaderboard_button")
+    builder.adjust(1, 1, 1, 2)
 
-        # Confession view deep link: start=view_X
-        elif deep_link_args.startswith("view_"):
-            try:
-                conf_id = int(deep_link_args.split("_", 1)[1])
-                async with db.acquire() as conn:
-                    conf_data = await conn.fetchrow("""
-                        SELECT c.text, c.categories, c.status, c.user_id, c.photo_file_id, c.prompt_text, COUNT(com.id) as comment_count 
-                        FROM confessions c 
-                        LEFT JOIN comments com ON c.id = com.confession_id 
-                        WHERE c.id = $1 
-                        GROUP BY c.id
-                    """, conf_id)
-                if not conf_data or conf_data['status'] != 'approved':
-                    await message.answer(f"Confession #{conf_id} not found or not approved.")
-                    return
-                comm_count = conf_data['comment_count']
-                categories = conf_data['categories'] or []
-                category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories]) if categories else "#Unknown"
-                prompt_line = f"💡 <b>Prompt:</b> <i>\"{html.quote(conf_data['prompt_text'])}\"</i>\n\n" if conf_data.get('prompt_text') else ""
-                
-                builder = InlineKeyboardBuilder()
-                builder.button(text="💬 Add Support / Comment", callback_data=f"add_{conf_id}")
-                builder.button(text=f"📜 Browse Reflections ({comm_count})", callback_data=f"browse_{conf_id}")
-                builder.adjust(1, 1)
-
-                theme = get_current_theme_config()
-                channel_header = theme["header_branding"]
-                header_text = f"<b>{channel_header} #{conf_id}</b>"
-
-                if conf_data['photo_file_id']:
-                    caption = f"{header_text}\n\n{prompt_line}{html.quote(conf_data['text'])}\n\n{category_tags}"
-                    if len(caption) > 1024:
-                        caption = caption[:1020] + "..."
-                    await bot.send_photo(
-                        chat_id=user_id,
-                        photo=conf_data['photo_file_id'],
-                        caption=caption,
-                        reply_markup=builder.as_markup()
-                    )
-                else:
-                    txt = f"{header_text}\n\n{prompt_line}{html.quote(conf_data['text'])}\n\n{category_tags}"
-                    await message.answer(txt, reply_markup=builder.as_markup())
-                return
-            except (ValueError, IndexError): 
-                await message.answer("Invalid link.")
-            except Exception as e: 
-                logging.error(f"Err handling deep link '{deep_link_args}': {e}", exc_info=True)
-                await message.answer("Error processing link.")
-
-    theme = get_current_theme_config()
-    tag, theme_title, theme_desc = get_today_theme()
-    _, prompt_text = get_today_prompt()
-
-    # Dynamic theme welcome message header
-    if theme["id"] == "enkutatash_2019":
-        welcome_header = (
-            "🌼✨ <b>መልካም አዲስ ዓመት 2019!</b> ✨🌼\n"
-            "<b>MWU Confession Vault | Enkutatash 2019 Edition</b>\n\n"
-            "💛 <i>As the golden Adey Abeba blooms across Ethiopia, may 2019 bring you peace, fresh starts, and forgiveness. "
-            "Leave behind 2018's burdens, unspoken regrets, and silent tears. Share your truth and embrace new beginnings "
-            "with 100% cryptographic anonymity.</i>\n\n"
-        )
-    else:
-        welcome_header = f"🏛️ <b>{theme.get('welcome_title', 'Anonymous Confession Vault')}</b>\n\n"
-
-    empathy_reactions_str = ", ".join(r['emoji'] for r in theme['reactions'].values())
-
-    welcome_text = (
-        f"{welcome_header}"
-        f"📅 <b>Active Community Theme:</b> <b>{theme_title}</b> ({tag})\n"
-        f"<i>{theme_desc}</i>\n\n"
-        f"💡 <b>Today's Reflection Prompt:</b>\n"
-        f"<i>\"{html.quote(prompt_text)}\"</i>"
-        f"🔒 <b>Zero-Identity Vault Active:</b>\n"
-        f"• 100% anonymous — your Telegram handle is never shown.\n"
-        f"• Zero tolerance for doxxing, real names, or phone numbers.\n"
-        f"• React with emotional micro-interactions ({empathy_reactions_str}) to support peers.\n\n"
-        f"<b>Commands:</b>\n"
-        f"• /confess - Share a secret or reflection\n"
-        f"• /prompt - View or answer today's prompt\n"
-        f"• /leaderboard - View top anonymous community supporters\n"
-        f"• /profile - Your Aura points & submission history\n"
-        f"• /rules - Zero-doxxing safety rules\n"
-        f"• /help - Guidelines & help"
+    await message.answer(
+        f"<b>{html.quote(theme['welcome_title'])}</b>\n\n"
+        f"{theme['welcome_greeting']}\n\n"
+        f"📅 <b>Current Theme:</b> <b>{html.quote(theme_title)}</b> (<code>{html.quote(tag)}</code>)\n"
+        f"<i>{html.quote(theme_desc)}</i>\n\n"
+        f"💡 <b>Today's Campus Reflection:</b>\n"
+        f"<i>\"{html.quote(today_prompt)}\"</i>\n\n"
+        "Tap below to share your story or dedicate a song anonymously:",
+        reply_markup=builder.as_markup()
     )
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💡 Answer Today's Prompt", callback_data="prompt_answer_today")],
-        [InlineKeyboardButton(text="✍️ Freeform Confession", callback_data="start_confess_button")],
-        [InlineKeyboardButton(text="🏆 Aura Leaderboard", callback_data="view_leaderboard")],
-        [InlineKeyboardButton(text="📜 Community Rules", callback_data="show_rules_help")]
-    ])
-    await message.answer(welcome_text, reply_markup=markup)
 
-# --- Daily Prompts & Gamification Leaderboard ---
-@dp.callback_query(F.data == "start_confess_button")
-async def start_confess_callback(callback_query: types.CallbackQuery, state: FSMContext):
-    await callback_query.answer()
-    await start_confession(callback_query.message, state)
+@dp.callback_query(F.data == "accept_rules_consent")
+async def accept_rules_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    user_id = callback_query.from_user.id
+    if db:
+        async with db.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO user_status (user_id, has_accepted_rules) VALUES ($1, TRUE)
+                ON CONFLICT (user_id) DO UPDATE SET has_accepted_rules = TRUE
+            """, user_id)
+    await callback_query.answer("Rules accepted! Welcome to the sanctuary.")
+    await send_welcome(callback_query.message, state)
+
+@dp.message(Command("rules"))
+async def cmd_rules(message: types.Message):
+    await message.answer(COMMUNITY_RULES_TEXT)
+
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    await message.answer(HELP_TEXT)
 
 @dp.message(Command("prompt"))
-async def show_daily_prompt(message: types.Message):
-    idx, p_text = get_today_prompt()
+async def cmd_prompt(message: types.Message, state: FSMContext):
+    today_prompt = get_today_prompt()
     tag, theme_title, _ = get_today_theme()
-    msg = (
-        f"💡 <b>Today's Low-Friction Prompt</b> ({tag})\n\n"
-        f"<i>\"{html.quote(p_text)}\"</i>"
-        f"Have a story or secret about this? Share it anonymously in one tap."
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✍️ Answer Anonymously", callback_data="prompt_respond_button")
+    await message.answer(
+        f"💡 <b>Today's Campus Reflection Prompt</b>\n"
+        f"Theme: <b>{html.quote(theme_title)}</b> ({tag})\n\n"
+        f"<i>\"{html.quote(today_prompt)}\"</i>\n\n"
+        "Would you like to share your anonymous answer with the channel?",
+        reply_markup=builder.as_markup()
     )
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✍️ Answer This Prompt", callback_data=f"answer_prompt_{idx}")],
-        [InlineKeyboardButton(text="🔄 Another Random Prompt", callback_data="prompt_shuffle")]
-    ])
-    await message.answer(msg, reply_markup=markup)
 
-@dp.callback_query(F.data == "prompt_shuffle")
-async def shuffle_prompt(callback_query: types.CallbackQuery):
-    import random
-    idx = random.randint(0, len(DAILY_PROMPTS) - 1)
-    p_text = DAILY_PROMPTS[idx]
-    msg = (
-        f"💡 <b>Inspiration Prompt #{idx+1}</b>\n\n"
-        f"<i>\"{html.quote(p_text)}\"</i>"
-        f"Share your reflection or story below:"
-    )
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✍️ Answer This Prompt", callback_data=f"answer_prompt_{idx}")],
-        [InlineKeyboardButton(text="🔄 Another Random Prompt", callback_data="prompt_shuffle")]
-    ])
-    try:
-        await callback_query.message.edit_text(msg, reply_markup=markup)
-    except TelegramBadRequest: pass
+@dp.callback_query(F.data == "prompt_respond_button")
+async def cb_prompt_respond(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.answer()
-
-@dp.callback_query(F.data.startswith("answer_prompt_") | (F.data == "prompt_answer_today"))
-async def answer_prompt_callback(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.data == "prompt_answer_today":
-        idx, p_text = get_today_prompt()
-    else:
-        idx = int(callback_query.data.split("_")[-1])
-        _, p_text = get_today_prompt(idx)
-
-    tag, _, _ = get_today_theme()
-    await state.update_data(active_prompt=p_text, selected_categories=["Other"])
-    await state.set_state(ConfessionForm.waiting_for_text)
-    await callback_query.message.edit_text(
-        f"💡 <b>Prompt:</b> <i>\"{html.quote(p_text)}\"</i>\n\n"
-        f"🔒 <b>Zero-Identity Vault Active:</b> Your personal identifiers are stripped.\n\n"
-        f"✍️ <b>Send your confession now:</b>\n"
-        f"• Plain text (up to {MAX_TEXT_CONFESSION_LEN} characters)\n"
-        f"• Photo with caption (photo up to {MAX_PHOTO_SIZE_MB}MB, caption up to {MAX_PHOTO_CAPTION_LEN} characters)\n\n"
-        f"Type /cancel at any point to abort.",
-        reply_markup=None
+    today_prompt = get_today_prompt()
+    await state.update_data(active_prompt=today_prompt, selected_categories=["Other"])
+    await state.set_state(ConfessionForm.writing_confession)
+    await callback_query.message.answer(
+        f"💡 <b>Responding to Daily Prompt:</b>\n<i>\"{html.quote(today_prompt)}\"</i>\n\n"
+        "Please send your confession text below (or attach a single photo with your text as caption).\n"
+        "<i>Send /cancel to stop.</i>"
     )
+
+@dp.message(Command("profile"))
+async def cmd_profile(message: types.Message):
+    await show_profile(message.from_user.id, message)
+
+@dp.callback_query(F.data == "view_profile_button")
+async def cb_view_profile(callback_query: types.CallbackQuery):
     await callback_query.answer()
+    await show_profile(callback_query.from_user.id, callback_query.message)
 
-@dp.message(Command("postprompt"))
-async def admin_post_prompt_to_channel(message: types.Message):
-    if not message.from_user or message.from_user.id != ADMIN_ID: return
-    idx, p_text = get_today_prompt()
-    tag, theme_title, _ = get_today_theme()
+async def show_profile(user_id: int, message_or_event):
+    points = 0
+    conf_count = 0
+    comm_count = 0
+    if db:
+        async with db.acquire() as conn:
+            pts = await conn.fetchval("SELECT points FROM user_points WHERE user_id = $1", user_id)
+            points = pts or 0
+            conf_count = await conn.fetchval("SELECT COUNT(*) FROM confessions WHERE user_id = $1", user_id) or 0
+            comm_count = await conn.fetchval("SELECT COUNT(*) FROM comments WHERE user_id = $1", user_id) or 0
 
-    channel_text = (
-        f"💡 <b>DAILY REFLECTION PROMPT</b> • {tag}\n\n"
-        f"<i>\"{html.quote(p_text)}\"</i>"
-        f"Tap the button below to share your honest, completely anonymous story in our safe vault 👇"
+    tier = get_aura_tier(points)
+    text = (
+        f"👤 <b>Your Campus Aura &amp; Profile</b>\n\n"
+        f"🎖️ <b>Rank &amp; Title:</b> {tier}\n"
+        f"✨ <b>Community Aura:</b> <code>{points} pts</code>\n\n"
+        f"📝 <b>Confessions Shared:</b> {conf_count}\n"
+        f"💬 <b>Supportive Comments:</b> {comm_count}\n\n"
+        f"<i>Earn Aura points by sharing courageous confessions (+{POINTS_PER_CONFESSION}), "
+        f"offering empathetic comments (+{POINTS_PER_COMMENT}), and receiving reactions (+{POINTS_PER_REACTION_RECEIVED})!</i>"
     )
-    link = f"https://t.me/{bot_info.username}?start=prompt_{idx}"
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✍️ Confess on This Prompt (100% Anonymous)", url=link)]
-    ])
-    try:
-        await bot.send_message(chat_id=CHANNEL_ID, text=channel_text, reply_markup=markup)
-        await message.reply(f"✅ Daily prompt posted to channel.")
-    except Exception as e:
-        await message.reply(f"❌ Failed to post prompt to channel: {e}")
+    if isinstance(message_or_event, types.Message):
+        await message_or_event.answer(text)
 
 @dp.message(Command("leaderboard"))
 async def cmd_leaderboard(message: types.Message):
-    await display_leaderboard(message.from_user.id, target_msg=message)
+    await show_leaderboard(message)
 
-@dp.callback_query(F.data == "view_leaderboard")
-async def callback_leaderboard(callback_query: types.CallbackQuery):
+@dp.callback_query(F.data == "view_leaderboard_button")
+async def cb_view_leaderboard(callback_query: types.CallbackQuery):
     await callback_query.answer()
-    await display_leaderboard(callback_query.from_user.id, callback_query=callback_query)
+    await show_leaderboard(callback_query.message)
 
-async def display_leaderboard(user_id: int, target_msg=None, callback_query=None):
-    async with db.acquire() as conn:
-        top_users = await conn.fetch("""
-            SELECT user_id, points 
-            FROM user_points 
-            ORDER BY points DESC 
-            LIMIT 10
-        """)
-        user_pts = await conn.fetchval("SELECT points FROM user_points WHERE user_id = $1", user_id) or 0
-        user_rank = await conn.fetchval("SELECT COUNT(*) + 1 FROM user_points WHERE points > (SELECT COALESCE(points, 0) FROM user_points WHERE user_id = $1)", user_id)
-
-    my_tier, _ = get_aura_tier(user_pts)
-    board_lines = [
-        "🏆 <b>Community Empathy Leaderboard</b>\n",
-        "<i>Recognizing our top anonymous peers who actively listen, share vulnerability, and support others:</i>\n"
-    ]
-    medals = ["🥇", "🥈", "🥉", "4.", "5.", "6.", "7.", "8.", "9.", "10."]
-    for idx, u in enumerate(top_users):
-        u_pts = u['points']
-        badge, _ = get_aura_tier(u_pts)
-        alias = get_anonymized_alias(u['user_id'])
-        is_me = " (You)" if u['user_id'] == user_id else ""
-        board_lines.append(f"{medals[idx]} <b>{alias}</b>{is_me} — {u_pts} 🏅 Aura ({badge.split()[0]})")
-
-    if not top_users:
-        board_lines.append("<i>No leaderboard points recorded yet. Be the first!</i>")
-
-    board_lines.append("\n━━━━━━━━━━━━━━━━━━━━")
-    board_lines.append(f"👤 <b>Your Status:</b> Rank #{user_rank or 1}")
-    board_lines.append(f"🏅 <b>Aura Points:</b> {user_pts} | <b>Tier:</b> {my_tier}")
-
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✍️ Share Confession (+5 🏅)", callback_data="start_confess_button")],
-        [InlineKeyboardButton(text="💡 Answer Daily Prompt", callback_data="prompt_answer_today")]
-    ])
-    text_body = "\n".join(board_lines)
-    if callback_query:
-        try: await callback_query.message.edit_text(text_body, reply_markup=markup)
-        except TelegramBadRequest: pass
-    elif target_msg:
-        await target_msg.answer(text_body, reply_markup=markup)
-
-
-@dp.callback_query(F.data == "accept_rules")
-async def handle_accept_rules(callback_query: types.CallbackQuery):
-    user_id = callback_query.from_user.id
-    async with db.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO user_status (user_id, has_accepted_rules) VALUES ($1, TRUE)
-            ON CONFLICT (user_id) DO UPDATE SET has_accepted_rules = TRUE
-        """, user_id)
-    await callback_query.message.edit_text(
-        "Thank you for accepting the rules! You can now use the bot.\n\n"
-        "Use /confess to share anonymously, /profile to see your history, or /help for more info.",
-        reply_markup=None
-    )
-    await callback_query.answer("Rules accepted!")
-
-@dp.message(Command("help"), StateFilter(None))
-async def show_help(message: types.Message):
-    help_text = (
-        "<b>Welcome to the Confession Bot!</b>\n\n"
-        "Commands:\n"
-        "🔹 /confess - Submit an anonymous confession (text or photo with caption).\n"
-        "🔹 /profile - View your points, submitted confessions, and comments.\n"
-        "🔹 /start - Show the welcome message or open confessions via link.\n"
-        "🔹 /help - Display this help message.\n"
-        "🔹 /rules - View bot rules and guidelines.\n"
-        "🔹 /privacy - View information about data privacy.\n"
-        "🔹 /cancel - Abort your current action.\n\n"
-        "Comment Controls:\n"
-        "👍/👎: Like/Dislike (+3🏅/-3🏅 to commenter).\n"
-        "↪️ Reply: Reply with Text, Sticker, or GIF.\n"
-        "⚠️ Report: Report inappropriate comments to the admin.\n"
-        "🤝 Request Contact: Confession author can request your @username."
-    )
-    action_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📜 Rules & Regulations", callback_data="show_rules_help")],
-        [InlineKeyboardButton(text="✉️ Contact Admin", callback_data="contact_admin_start")]
-    ])
-    if message.from_user and message.from_user.id == ADMIN_ID:
-        help_text += (
-            "\n\n<b>Admin Commands:</b>\n"
-            "🔹 /id &lt;user_id&gt; - Inspect user profile.\n"
-            "🔹 /warn &lt;user_id&gt; &lt;reason&gt; - Send warning.\n"
-            "🔹 /block &lt;user_id&gt; &lt;duration&gt; [reason] - e.g. 7d, 2w.\n"
-            "🔹 /pblock &lt;user_id&gt; [reason] - Permanently ban.\n"
-            "🔹 /unblock &lt;user_id&gt; - Unban user."
-        )
-
-    await message.answer(help_text, reply_markup=action_keyboard)
-
-@dp.callback_query(F.data == "show_rules_help")
-async def show_rules_from_help(callback_query: types.CallbackQuery):
-    await callback_query.answer()
-    await show_rules(callback_query.message)
-
-@dp.callback_query(F.data == "contact_admin_start", StateFilter(None))
-async def start_contact_admin_callback(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.set_state(ContactAdminForm.waiting_for_message)
-    cancel_button = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/cancel")]], resize_keyboard=True, one_time_keyboard=True)
-    await callback_query.answer("Please send your message to the admin.")
-    await callback_query.message.answer("Please send the message you want to forward to the admin. Type /cancel to abort.", reply_markup=cancel_button)
-
-@dp.message(Command("privacy"), StateFilter(None))
-async def show_privacy(message: types.Message):
-    privacy_text = (
-        "<b>Privacy Information</b>\n\n"
-        "▪️ Your Telegram User ID is stored securely but never shown publicly.\n"
-        "▪️ Comments and confessions are posted anonymously.\n"
-        "▪️ Authors requesting contact require your explicit consent before your @username is shared.\n"
-        f"▪️ The bot admin (User ID: <code>{ADMIN_ID}</code>) moderates content to enforce community safety."
-    )
-    await message.answer(privacy_text)
-
-@dp.message(Command("cancel"), StateFilter('*'))
-async def cancel_any_state(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Action cancelled.", reply_markup=ReplyKeyboardRemove())
-
-@dp.message(ContactAdminForm.waiting_for_message, F.text)
-async def receive_admin_message(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    user_info = message.from_user
-    message_text = message.text.strip()
-    if not user_info: 
-        await message.answer("Could not identify sender. Action cancelled."); await state.clear(); return
-    if len(message_text) < 5: 
-        await message.answer("Message too short (minimum 5 characters)."); return
-    if len(message_text) > 2000: 
-        await message.answer("Message too long (maximum 2000 characters)."); return
-    admin_message = (
-        f"<b>📬 Contact Request from User</b>\n\n"
-        f"<b>User ID:</b> <code>{user_id}</code>\n"
-        f"<b>Username:</b> @{user_info.username if user_info.username else 'Not Set'}\n"
-        f"<b>Message:</b>\n{html.quote(message_text)}"
-        f"\n\n---\nReply to this message to respond to User ID <code>{user_id}</code>."
-    )
-    try:
-        await bot.send_message(ADMIN_ID, admin_message)
-        await message.answer("✅ Your message has been sent to the admin.", reply_markup=ReplyKeyboardRemove())
-    except Exception as e: 
-        logging.error(f"Failed forward msg from {user_id} to admin: {e}")
-        await message.answer("❌ Error sending message.")
-    finally: 
-        await state.clear()
-
-@dp.message(F.from_user.id == ADMIN_ID, F.reply_to_message)
-async def handle_admin_reply(message: types.Message, state: FSMContext):
-    if await state.get_state() is not None: return
-    replied_to = message.reply_to_message
-    if not replied_to or not bot_info or not replied_to.from_user or replied_to.from_user.id != bot_info.id: return
-
-    text_to_search = replied_to.html_text or replied_to.caption_html or ""
-    match = re.search(r"User ID:\s*<code>(\d+)</code>", text_to_search, re.IGNORECASE)
-    if not match: return
-
-    target_user_id = int(match.group(1))
-    sent = await safe_send_message(target_user_id, f"💬 <b>Admin Reply:</b>\n\n{html.quote(message.text or '')}")
-    if sent: 
-        await message.reply("✅ Reply sent to the user.")
-    else: 
-        await message.reply("⚠️ Failed to send reply. User may have blocked the bot.")
-
-
-# --- Admin Dynamic Theme Management System ---
-@dp.message(Command("settheme"))
-async def admin_set_theme_command(message: types.Message, command: Optional[CommandObject] = None):
-    if not message.from_user or message.from_user.id != ADMIN_ID:
+async def show_leaderboard(message: types.Message):
+    if not db:
+        await message.answer("Leaderboard currently unavailable.")
         return
 
-    arg = (command.args or "").strip().lower() if command else ""
-    alias_map = {
-        "default": "default",
-        "standard": "default",
-        "newyear": "enkutatash_2019",
-        "enkutatash": "enkutatash_2019",
-        "enkutatash_2019": "enkutatash_2019",
-        "exam": "exam_season",
-        "exam_season": "exam_season",
-        "crush": "crush_romance",
-        "crush_romance": "crush_romance",
-        "romance": "crush_romance"
-    }
+    async with db.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id, points FROM user_points ORDER BY points DESC LIMIT 10")
 
-    if arg and arg in alias_map:
-        target_theme = alias_map[arg]
-        await set_active_theme(target_theme)
-        t_conf = THEMES[target_theme]
-        await message.reply(
-            f"✅ <b>Active Theme Switched to:</b> {t_conf['name']}\n"
-            f"<b>Header Branding:</b> <code>{t_conf['header_branding']}</code>\n"
-            f"<b>Active Tag:</b> {t_conf['tag']}\n"
-            f"<b>Reactions:</b> {' '.join(r['emoji'] for r in t_conf['reactions'].values())}\n"
-            f"<b>Pinned Categories:</b> {', '.join(t_conf.get('pinned_categories', [])) or 'None'}"
-        )
+    if not rows:
+        await message.answer("🏆 <b>Sanctuary Leaderboard</b>\n\nNo points recorded yet. Be the first to earn Aura!")
         return
 
-    current_theme = await get_active_theme()
-    builder = InlineKeyboardBuilder()
-    for t_id, t_conf in THEMES.items():
-        is_active = (t_id == current_theme)
-        check = "✅ " if is_active else ""
-        builder.button(
-            text=f"{check}{t_conf['menu_label']}",
-            callback_data=f"set_theme_{t_id}"
-        )
-    builder.adjust(1)
+    lines = ["🏆 <b>Top Supportive Campus Guardians</b>\n"]
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+    for i, r in enumerate(rows):
+        medal = medals[i] if i < len(medals) else "👤"
+        tier = get_aura_tier(r['points'])
+        anon_id = str(r['user_id'])[-4:]
+        lines.append(f"{medal} <b>Peer #{anon_id}</b> — {r['points']} pts • <i>{tier}</i>")
 
-    curr_conf = THEMES.get(current_theme, THEMES["default"])
-    text_msg = (
-        "🎨 <b>Admin Dynamic Theme Management System</b>\n\n"
-        f"<b>Current Active Theme:</b> {curr_conf['name']}\n"
-        f"<b>Header Branding:</b> <code>{curr_conf['header_branding']}</code>\n"
-        f"<b>Active Tag:</b> {curr_conf['tag']}\n"
-        f"<b>Reactions:</b> {' '.join(r['emoji'] for r in curr_conf['reactions'].values())}\n"
-        f"<b>Pinned Categories:</b> {', '.join(curr_conf.get('pinned_categories', [])) or 'None (Default list)'}\n\n"
-        "<i>Select a community theme below to instantly switch the bot's global branding, channel headers, welcome greeting, and categories:</i>"
-    )
-    await message.answer(text_msg, reply_markup=builder.as_markup())
-
-@dp.callback_query(F.data.startswith("set_theme_"))
-async def handle_theme_selection_callback(callback_query: types.CallbackQuery):
-    if callback_query.from_user.id != ADMIN_ID:
-        await callback_query.answer("Unauthorized.", show_alert=True)
-        return
-
-    selected_theme_id = callback_query.data.replace("set_theme_", "")
-    if selected_theme_id not in THEMES:
-        await callback_query.answer("Theme not found.", show_alert=True)
-        return
-
-    await set_active_theme(selected_theme_id)
-    t_conf = THEMES[selected_theme_id]
-
-    builder = InlineKeyboardBuilder()
-    for t_id, tc in THEMES.items():
-        is_active = (t_id == selected_theme_id)
-        check = "✅ " if is_active else ""
-        builder.button(
-            text=f"{check}{tc['menu_label']}",
-            callback_data=f"set_theme_{t_id}"
-        )
-    builder.adjust(1)
-
-    updated_text = (
-        "🎨 <b>Admin Dynamic Theme Management System</b>\n\n"
-        f"🎉 <b>Active Theme Successfully Updated to:</b> {t_conf['name']}\n\n"
-        f"🌼 <b>Header Branding:</b> <code>{t_conf['header_branding']}</code>\n"
-        f"🏷️ <b>Active Tag:</b> {t_conf['tag']}\n"
-        f"💛 <b>Empathy Reactions:</b> {' '.join(r['emoji'] for r in t_conf['reactions'].values())}\n"
-        f"📌 <b>Pinned Categories:</b> {', '.join(t_conf.get('pinned_categories', [])) or 'None (Default list)'}\n\n"
-        f"<i>All channel posts, welcome greetings (/start), and confession category pickers are now actively branded!</i>"
-    )
-
-    try:
-        await callback_query.message.edit_text(updated_text, reply_markup=builder.as_markup())
-    except TelegramBadRequest:
-        pass
-
-    await callback_query.answer(f"Switched theme to {t_conf['name']}!", show_alert=True)
-
-@dp.message(Command("id"))
-async def get_user_info_command(message: types.Message, command: CommandObject):
-    if not message.from_user or message.from_user.id != ADMIN_ID: return
-    if not command.args: await message.reply("Usage: /id <user_id>"); return
-    try: target_user_id = int(command.args.strip())
-    except ValueError: await message.reply("Invalid User ID."); return
-    info_parts = [f"ℹ️ <b>User Info for ID:</b> <code>{target_user_id}</code>\n"]
-    try:
-        chat_info = await bot.get_chat(target_user_id)
-        info_parts.append(f"<b>Username:</b> @{html.quote(chat_info.username or 'Not Set')}")
-        info_parts.append(f"<b>First Name:</b> {html.quote(chat_info.first_name or 'N/A')}")
-    except Exception as e: 
-        info_parts.append(f"⚠️ <b>Telegram Details:</b> Could not fetch ({e})")
-    try:
-        async with db.acquire() as conn:
-            user_points = await get_user_points(target_user_id)
-            conf_count = await conn.fetchval("SELECT COUNT(*) FROM confessions WHERE user_id = $1", target_user_id) or 0
-            comm_count = await conn.fetchval("SELECT COUNT(*) FROM comments WHERE user_id = $1", target_user_id) or 0
-            status_data = await conn.fetchrow("SELECT is_blocked, blocked_until, has_accepted_rules FROM user_status WHERE user_id = $1", target_user_id)
-            
-            info_parts.append(f"\n<b>Bot Activity:</b>\n  - <b>Medal Points:</b> 🏅 {user_points}\n  - <b>Confessions:</b> {conf_count}\n  - <b>Comments:</b> {comm_count}")
-            if status_data:
-                info_parts.append(f"  - <b>Accepted Rules:</b> {'Yes' if status_data['has_accepted_rules'] else 'No'}")
-                if status_data['is_blocked']:
-                    expiry = f"until {status_data['blocked_until'].strftime('%Y-%m-%d')}" if status_data['blocked_until'] else "Permanently"
-                    info_parts.append(f"  - <b>Status:</b> ❌ Blocked ({expiry})")
-    except Exception as e: 
-        info_parts.append(f"\n❌ Error fetching database info: {e}")
-    await message.reply("\n".join(info_parts))
-
-# --- Profile Menu ---
-def create_profile_pagination_keyboard(base_callback: str, current_page: int, total_pages: int):
-    builder = InlineKeyboardBuilder()
-    row = []
-    if current_page > 1:
-        row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"{base_callback}_{current_page - 1}"))
-    if total_pages > 1:
-        row.append(InlineKeyboardButton(text=f"Page {current_page}/{total_pages}", callback_data="noop"))
-    if current_page < total_pages:
-        row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"{base_callback}_{current_page + 1}"))
-    if row:
-        builder.row(*row)
-    builder.row(InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_menu_main_1"))
-    return builder.as_markup()
-
-@dp.message(Command("profile"))
-async def user_profile(message: types.Message):
-    user_id = message.from_user.id
-    points = await get_user_points(user_id)
-    tier, tier_desc = get_aura_tier(points)
-    profile_text = (
-        f"👤 <b>Your Anonymous Vault Profile</b>\n\n"
-        f"🏅 <b>Aura Points:</b> {points}\n"
-        f"🎖️ <b>Empathy Tier:</b> {tier}\n"
-        f"<i>\"{tier_desc}\"</i>\n\n"
-        f"🔒 <i>Your identity is 100% hidden from peers in the community.</i>"
-    )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📜 My Confessions", callback_data="profile_menu_confessions_1")],
-        [InlineKeyboardButton(text="💬 My Comments", callback_data="profile_menu_comments_1")],
-        [InlineKeyboardButton(text="🏆 View Leaderboard", callback_data="view_leaderboard")]
-    ])
-    await message.answer(profile_text, reply_markup=keyboard)
-
-@dp.callback_query(F.data.startswith("profile_menu_"))
-async def handle_profile_menu(callback_query: types.CallbackQuery):
-    user_id = callback_query.from_user.id
-    parts = callback_query.data.split("_")
-    action = parts[2]
-    page = int(parts[-1])
-
-    try:
-        if action == "main":
-            points = await get_user_points(user_id)
-            profile_text = f"👤 <b>Your Profile</b>\n\n🏅 <b>Medal Points (Aura):</b> {points}"
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📜 My Confessions", callback_data="profile_menu_confessions_1")],
-                [InlineKeyboardButton(text="💬 My Comments", callback_data="profile_menu_comments_1")]
-            ])
-            await callback_query.message.edit_text(profile_text, reply_markup=keyboard)
-
-        elif action == "confessions":
-            async with db.acquire() as conn:
-                total_count = await conn.fetchval("SELECT COUNT(*) FROM confessions WHERE user_id = $1", user_id) or 0
-                if total_count == 0:
-                    await callback_query.answer("You haven't submitted any confessions yet.", show_alert=True)
-                    return
-
-                total_pages = (total_count + 5 - 1) // 5
-                page = max(1, min(page, total_pages))
-                offset = (page - 1) * 5
-                confessions = await conn.fetch("""
-                    SELECT id, text, status, created_at, photo_file_id 
-                    FROM confessions 
-                    WHERE user_id = $1 
-                    ORDER BY created_at DESC 
-                    LIMIT 5 OFFSET $2
-                """, user_id, offset)
-
-            response_text = f"<b>📜 Your Confessions (Page {page}/{total_pages})</b>\n\n"
-            builder = InlineKeyboardBuilder()
-            for conf in confessions:
-                snippet = html.quote(conf['text'][:60]) + ('...' if len(conf['text']) > 60 else '')
-                status_emoji = {"approved": "✅", "pending": "⏳", "rejected": "❌", "deleted": "🗑️"}.get(conf['status'], "❓")
-                photo_indicator = " 📷" if conf['photo_file_id'] else ""
-                response_text += f"<b>ID:</b> #{conf['id']} ({status_emoji} {conf['status'].capitalize()}{photo_indicator})\n<i>\"{snippet}\"</i>\n\n"
-                if conf['status'] in ['approved', 'pending']:
-                    builder.row(InlineKeyboardButton(text=f"Request Deletion for #{conf['id']}", callback_data=f"req_del_conf_{conf['id']}"))
-
-            nav_keyboard = create_profile_pagination_keyboard("profile_menu_confessions", page, total_pages)
-            final_markup = builder.attach(InlineKeyboardBuilder.from_markup(nav_keyboard)).as_markup()
-            await callback_query.message.edit_text(response_text, reply_markup=final_markup)
-
-        elif action == "comments":
-            async with db.acquire() as conn:
-                total_count = await conn.fetchval("SELECT COUNT(*) FROM comments WHERE user_id = $1", user_id) or 0
-                if total_count == 0:
-                    await callback_query.answer("You haven't made any comments yet.", show_alert=True)
-                    return
-
-                total_pages = (total_count + 5 - 1) // 5
-                page = max(1, min(page, total_pages))
-                offset = (page - 1) * 5
-                comments = await conn.fetch("""
-                    SELECT id, text, sticker_file_id, animation_file_id, confession_id, created_at 
-                    FROM comments 
-                    WHERE user_id = $1 
-                    ORDER BY created_at DESC 
-                    LIMIT 5 OFFSET $2
-                """, user_id, offset)
-
-            response_text = f"<b>💬 Your Comments (Page {page}/{total_pages})</b>\n\n"
-            for comm in comments:
-                if comm['text']: snippet = "💬 " + html.quote(comm['text'][:60]) + ('...' if len(comm['text']) > 60 else '')
-                elif comm['sticker_file_id']: snippet = "[Sticker]"
-                elif comm['animation_file_id']: snippet = "[GIF]"
-                else: snippet = "[Content]"
-                link = f"https://t.me/{bot_info.username}?start=view_{comm['confession_id']}"
-                response_text += f"On Confession <a href='{link}'>#{comm['confession_id']}</a>:\n<i>\"{snippet}\"</i>\n\n"
-
-            nav_keyboard = create_profile_pagination_keyboard("profile_menu_comments", page, total_pages)
-            await callback_query.message.edit_text(response_text, reply_markup=nav_keyboard, disable_web_page_preview=True)
-    
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e).lower():
-            raise
-    finally:
-        await callback_query.answer()
-
-@dp.callback_query(F.data.startswith("req_del_conf_"))
-async def request_deletion_prompt(callback_query: types.CallbackQuery):
-    conf_id = int(callback_query.data.split("_")[-1])
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Yes, Request Deletion", callback_data=f"confirm_del_conf_{conf_id}")],
-        [InlineKeyboardButton(text="❌ No, Cancel", callback_data="profile_menu_confessions_1")]
-    ])
-    await callback_query.message.edit_text(
-        f"Are you sure you want to request deletion of Confession #{conf_id}? If approved by an admin, this action is permanent.",
-        reply_markup=keyboard
-    )
-    await callback_query.answer()
-
-@dp.callback_query(F.data.startswith("confirm_del_conf_"))
-async def confirm_deletion_request(callback_query: types.CallbackQuery):
-    conf_id = int(callback_query.data.split("_")[-1])
-    user_id = callback_query.from_user.id
-
-    async with db.acquire() as conn:
-        try:
-            conf_data = await conn.fetchrow("SELECT user_id, text, status FROM confessions WHERE id = $1", conf_id)
-            if not conf_data or conf_data['user_id'] != user_id:
-                await callback_query.answer("This is not your confession.", show_alert=True); return
-            if conf_data['status'] not in ['approved', 'pending']:
-                await callback_query.answer(f"Cannot delete confession with status '{conf_data['status']}'.", show_alert=True); return
-
-            await conn.execute("""
-                INSERT INTO deletion_requests (confession_id, user_id, status) VALUES ($1, $2, 'pending')
-                ON CONFLICT (confession_id, user_id) DO NOTHING
-            """, conf_id, user_id)
-
-            snippet = html.quote(conf_data['text'][:200])
-            admin_text = (
-                f"🗑️ <b>New Deletion Request</b>\n\n"
-                f"<b>User ID:</b> <code>{user_id}</code>\n"
-                f"<b>Confession ID:</b> <code>{conf_id}</code>\n\n"
-                f"<b>Content Snippet:</b>\n<i>\"{snippet}...\"</i>"
-            )
-            admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Approve Deletion", callback_data=f"admin_approve_delete_{conf_id}")],
-                [InlineKeyboardButton(text="❌ Reject Deletion", callback_data=f"admin_reject_delete_{conf_id}")]
-            ])
-            await bot.send_message(ADMIN_ID, admin_text, reply_markup=admin_keyboard)
-            await callback_query.answer("✅ Deletion request sent. An admin will review it shortly.", show_alert=True)
-            callback_query.data = "profile_menu_confessions_1"
-            await handle_profile_menu(callback_query)
-
-        except asyncpg.exceptions.UniqueViolationError:
-            await callback_query.answer("You have already requested deletion for this confession.", show_alert=True)
-        except Exception as e:
-            logging.error(f"Error processing deletion request for conf {conf_id} by user {user_id}: {e}")
-            await callback_query.answer("An error occurred while sending your request.", show_alert=True)
-
-# --- FIX 5: Fixed cascade deletion conflict in admin_handle_deletion_request ---
-@dp.callback_query(F.data.startswith(("admin_approve_delete_", "admin_reject_delete_")))
-async def admin_handle_deletion_request(callback_query: types.CallbackQuery):
-    if callback_query.from_user.id != ADMIN_ID:
-        await callback_query.answer("Unauthorized.", show_alert=True); return
-
-    parts = callback_query.data.split("_")
-    action = parts[1]
-    conf_id = int(parts[-1])
-    final_status = ""
-
-    async with db.acquire() as conn:
-        async with conn.transaction():
-            req_data = await conn.fetchrow("SELECT id, user_id FROM deletion_requests WHERE confession_id = $1 AND status = 'pending'", conf_id)
-            if not req_data:
-                await callback_query.answer("Request not found or already processed.", show_alert=True); return
-
-            if action == "approve":
-                conf_to_delete = await conn.fetchrow("SELECT message_id, user_id FROM confessions WHERE id = $1", conf_id)
-                # Mark deletion request approved before deleting parent confession
-                await conn.execute("UPDATE deletion_requests SET status = 'approved', reviewed_at = CURRENT_TIMESTAMP WHERE id = $1", req_data['id'])
-                if conf_to_delete:
-                    if conf_to_delete['message_id']:
-                        try:
-                            await bot.delete_message(chat_id=CHANNEL_ID, message_id=conf_to_delete['message_id'])
-                        except Exception as e:
-                            logging.warning(f"Could not delete channel message {conf_to_delete.get('message_id')}: {e}")
-                    await conn.execute("DELETE FROM confessions WHERE id = $1", conf_id)
-
-                await safe_send_message(req_data['user_id'], f"✅ Your request to delete Confession #{conf_id} has been approved.")
-                final_status = "Approved & Deleted"
-            else:
-                await conn.execute("UPDATE deletion_requests SET status = 'rejected', reviewed_at = CURRENT_TIMESTAMP WHERE id = $1", req_data['id'])
-                await safe_send_message(req_data['user_id'], f"❌ Your request to delete Confession #{conf_id} was rejected by the admin.")
-                final_status = "Rejected"
-
-    await callback_query.message.edit_text(callback_query.message.html_text + f"\n\n-- Deletion Request: {final_status} --", reply_markup=None)
-    await callback_query.answer(f"Request {final_status}.")
-
-# --- Admin User Management ---
-@dp.message(Command("warn"))
-async def admin_warn_user(message: types.Message, command: CommandObject):
-    if not message.from_user or message.from_user.id != ADMIN_ID: return
-    if not command.args:
-        await message.reply("Usage: /warn <user_id> <reason>"); return
-    parts = command.args.split(maxsplit=1)
-    if len(parts) < 2:
-        await message.reply("Usage: /warn <user_id> <reason>"); return
-    try:
-        target_user_id = int(parts[0])
-        reason = parts[1]
-    except ValueError:
-        await message.reply("Invalid User ID."); return
-    
-    warning_text = f"⚠️ <b>You have received a warning from the admin.</b>\n\n<b>Reason:</b> <i>{html.quote(reason)}</i>\n\nPlease adhere to the bot's rules."
-    sent = await safe_send_message(target_user_id, warning_text)
-    if sent:
-        await message.reply(f"✅ Warning sent to User ID <code>{target_user_id}</code>.")
-    else:
-        await message.reply(f"⚠️ Failed to send warning to User ID <code>{target_user_id}</code>.")
-
-async def apply_block(message: types.Message, user_id: int, reason: Optional[str], is_permanent: bool, duration_str: Optional[str] = None):
-    blocked_until = None
-    if not is_permanent:
-        if not duration_str: return await message.reply("Duration is required for temporary blocks.")
-        try:
-            val = int(duration_str[:-1])
-            unit = duration_str[-1].lower()
-            if unit == 'd': blocked_until = datetime.now(timezone.utc) + timedelta(days=val)
-            elif unit == 'w': blocked_until = datetime.now(timezone.utc) + timedelta(weeks=val)
-            else: raise ValueError("Invalid time unit")
-        except (ValueError, IndexError):
-            return await message.reply("Invalid duration format. Use 'd' for days or 'w' for weeks (e.g., 7d, 2w).")
-
-    async with db.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO user_status (user_id, is_blocked, blocked_until, block_reason) 
-            VALUES ($1, TRUE, $2, $3)
-            ON CONFLICT (user_id) DO UPDATE SET
-            is_blocked = TRUE, blocked_until = $2, block_reason = $3
-        """, user_id, blocked_until, reason)
-    
-    expiry_info = "permanently" if is_permanent else f"until {blocked_until.strftime('%Y-%m-%d %H:%M UTC')}"
-    reason_info = f"\nReason: <i>{html.quote(reason)}</i>" if reason else ""
-    notification_text = f"❌ <b>You have been blocked from using this bot {expiry_info}.</b>{reason_info}"
-    
-    await safe_send_message(user_id, notification_text)
-    await message.reply(f"✅ User ID <code>{user_id}</code> has been blocked {expiry_info}.")
-
-@dp.message(Command("block"))
-async def admin_block_user(message: types.Message, command: CommandObject):
-    if not message.from_user or message.from_user.id != ADMIN_ID: return
-    if not command.args: return await message.reply("Usage: /block <user_id> <duration> [reason]")
-    parts = command.args.split(maxsplit=2)
-    if len(parts) < 2: return await message.reply("Usage: /block <user_id> <duration> [reason]")
-    try: target_user_id = int(parts[0])
-    except ValueError: return await message.reply("Invalid User ID.")
-    duration = parts[1]
-    reason = parts[2] if len(parts) > 2 else None
-    await apply_block(message, target_user_id, reason, is_permanent=False, duration_str=duration)
-
-@dp.message(Command("pblock"))
-async def admin_pblock_user(message: types.Message, command: CommandObject):
-    if not message.from_user or message.from_user.id != ADMIN_ID: return
-    if not command.args: return await message.reply("Usage: /pblock <user_id> [reason]")
-    parts = command.args.split(maxsplit=1)
-    try: target_user_id = int(parts[0])
-    except ValueError: return await message.reply("Invalid User ID.")
-    reason = parts[1] if len(parts) > 1 else None
-    await apply_block(message, target_user_id, reason, is_permanent=True)
-
-@dp.message(Command("unblock"))
-async def admin_unblock_user(message: types.Message, command: CommandObject):
-    if not message.from_user or message.from_user.id != ADMIN_ID: return
-    if not command.args: return await message.reply("Usage: /unblock <user_id>")
-    try: target_user_id = int(command.args.strip())
-    except ValueError: return await message.reply("Invalid User ID.")
-    
-    async with db.acquire() as conn:
-        result = await conn.execute("""
-            UPDATE user_status SET is_blocked = FALSE, blocked_until = NULL, block_reason = NULL 
-            WHERE user_id = $1 AND is_blocked = TRUE
-        """, target_user_id)
-    
-    if result == "UPDATE 1":
-        await safe_send_message(target_user_id, "✅ You have been unblocked by the admin and can now use the bot again.")
-        await message.reply(f"✅ User ID <code>{target_user_id}</code> has been unblocked.")
-    else:
-        await message.reply(f"ℹ️ User ID <code>{target_user_id}</code> was not blocked.")
+    lines.append("\n<i>All identities are fully anonymized to protect student privacy.</i>")
+    await message.answer("\n".join(lines))
 
 # --- Confession Submission Flow ---
-@dp.message(Command("confess"), StateFilter(None))
+@dp.message(Command("confess"))
 async def start_confession(message: types.Message, state: FSMContext):
+    await state.clear()
     tag, theme_title, theme_desc = get_today_theme()
     await state.update_data(selected_categories=[], active_prompt=None)
     await message.answer(
@@ -1574,736 +865,1092 @@ async def start_confession(message: types.Message, state: FSMContext):
     )
     await state.set_state(ConfessionForm.selecting_categories)
 
-@dp.callback_query(StateFilter(ConfessionForm.selecting_categories), F.data.startswith("category_"))
+@dp.callback_query(F.data == "start_confess_button")
+async def start_confess_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer()
+    await start_confession(callback_query.message, state)
+
+@dp.callback_query(ConfessionForm.selecting_categories, F.data.startswith("cat_"))
 async def handle_category_selection(callback_query: types.CallbackQuery, state: FSMContext):
-    action = callback_query.data.split("_", 1)[1]
-    user_data = await state.get_data()
-    selected_categories: List[str] = user_data.get("selected_categories", [])
-    if action == "cancel":
-        await state.clear()
-        await callback_query.message.edit_text("Confession submission cancelled.", reply_markup=None)
-        return
-    if action == "done":
-        if not selected_categories: 
-            await callback_query.answer("Please select at least 1 category.", show_alert=True)
+    data = await state.get_data()
+    selected_cats = data.get("selected_categories", [])
+    choice = callback_query.data.replace("cat_", "")
+
+    if choice == "done":
+        if not selected_cats:
+            await callback_query.answer("Please pick at least one category.", show_alert=True)
             return
-        if len(selected_categories) > MAX_CATEGORIES: 
-            await callback_query.answer(f"Too many categories (max {MAX_CATEGORIES}).", show_alert=True)
-            return
-        await state.set_state(ConfessionForm.waiting_for_text)
-        category_tags = " ".join([f"#{html.quote(cat)}" for cat in selected_categories])
-        
+        await state.set_state(ConfessionForm.writing_confession)
         await callback_query.message.edit_text(
-            f"✅ <b>Categories selected:</b> {category_tags}\n\n"
-            f"📝 <b>Now, send your confession:</b>\n\n"
-            f"• Text only: min 10 chars, max {MAX_TEXT_CONFESSION_LEN} chars\n"
-            f"• Text with photo: Send photo with caption (max {MAX_PHOTO_CAPTION_LEN} chars)\n\n"
-            f"<i>Type /cancel to abort.</i>"
+            f"🏷️ <b>Categories Selected:</b> {', '.join(selected_cats)}\n\n"
+            "Please write your confession below (or upload a photo with caption):\n"
+            "<i>Your identity remains 100% confidential. Send /cancel to stop.</i>"
         )
-        await callback_query.answer(); return
-    category = action
-    available_cats = get_available_categories()
-    if category in available_cats:
-        if category in selected_categories: selected_categories.remove(category)
-        elif len(selected_categories) < MAX_CATEGORIES: selected_categories.append(category)
-        else: await callback_query.answer(f"You can only select up to {MAX_CATEGORIES} categories.", show_alert=True); return
-        await state.update_data(selected_categories=selected_categories)
-        await callback_query.message.edit_reply_markup(reply_markup=create_category_keyboard(selected_categories))
+        return
+
+    if choice in selected_cats:
+        selected_cats.remove(choice)
+    else:
+        if len(selected_cats) >= MAX_CATEGORIES:
+            await callback_query.answer(f"Maximum {MAX_CATEGORIES} categories allowed.", show_alert=True)
+            return
+        selected_cats.append(choice)
+
+    await state.update_data(selected_categories=selected_cats)
+    try:
+        await callback_query.message.edit_reply_markup(reply_markup=create_category_keyboard(selected_cats))
+    except TelegramBadRequest:
+        pass
+    await callback_query.answer()
+
+@dp.message(ConfessionForm.writing_confession, F.photo | F.text)
+async def process_confession_content(message: types.Message, state: FSMContext):
+    if message.text and message.text.startswith("/cancel"):
+        await state.clear()
+        await message.answer("Confession cancelled.")
+        return
+
+    data = await state.get_data()
+    selected_cats = data.get("selected_categories", ["Other"])
+    active_prompt = data.get("active_prompt")
+    user_id = message.from_user.id
+
+    text = message.caption or message.text or ""
+    if len(text.strip()) < 5:
+        await message.answer("Please write at least a few words for your confession.")
+        return
+
+    photo_id = message.photo[-1].file_id if message.photo else None
+
+    # Anti-doxxing pattern check (phone numbers, full handles)
+    if re.search(r'\b(?:\+?251|0)?9\d{8}\b', text) or re.search(r'@\w{4,}', text):
+        await message.answer(
+            "⚠️ <b>Privacy Warning:</b> Your submission appears to contain a phone number or handle. "
+            "Please remove all identifying information to protect community safety and resend."
+        )
+        return
+
+    if db:
+        async with db.acquire() as conn:
+            conf_id = await conn.fetchval("""
+                INSERT INTO confessions (text, user_id, status, photo_file_id, prompt_text, categories)
+                VALUES ($1, $2, 'pending', $3, $4, $5)
+                RETURNING id
+            """, text, user_id, photo_id, active_prompt, selected_cats)
+    else:
+        conf_id = 999
+
+    await award_points(user_id, POINTS_PER_CONFESSION)
+    await state.clear()
+
+    await message.answer(
+        f"🕊️ <b>Confession #{conf_id} Submitted Successfully!</b>\n\n"
+        f"🏷️ Categories: <code>{', '.join(selected_cats)}</code>\n"
+        f"✨ You earned <b>+{POINTS_PER_CONFESSION} Aura points</b> for your courage.\n\n"
+        "Your post is awaiting admin approval before being broadcasted to the channel."
+    )
+
+    # Admin Alert
+    if ADMIN_ID and bot_info:
+        admin_text = (
+            f"🛡️ <b>NEW CONFESSION #{conf_id} AWAITING APPROVAL</b>\n\n"
+            f"<b>Categories:</b> {', '.join(selected_cats)}\n"
+            f"<b>Prompt:</b> {html.quote(active_prompt) if active_prompt else 'None'}\n\n"
+            f"<b>Content:</b>\n{html.quote(text)}"
+        )
+        mod_builder = InlineKeyboardBuilder()
+        mod_builder.button(text="✅ Approve", callback_data=f"adm_appr_conf_{conf_id}")
+        mod_builder.button(text="❌ Reject", callback_data=f"adm_rej_conf_{conf_id}")
+        mod_builder.adjust(2)
+        try:
+            if photo_id:
+                await bot.send_photo(ADMIN_ID, photo=photo_id, caption=admin_text, reply_markup=mod_builder.as_markup())
+            else:
+                await bot.send_message(ADMIN_ID, text=admin_text, reply_markup=mod_builder.as_markup())
+        except Exception as e:
+            logging.error(f"Failed to send confession #{conf_id} to admin: {e}")
+
+@dp.callback_query(F.data.startswith("adm_appr_conf_"))
+async def handle_admin_approve_conf(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer("Unauthorized.", show_alert=True)
+        return
+
+    conf_id = int(callback_query.data.split("_")[-1])
+    if not db:
+        return
+
+    async with db.acquire() as conn:
+        conf = await conn.fetchrow("SELECT * FROM confessions WHERE id = $1", conf_id)
+        if not conf or conf['status'] != 'pending':
+            await callback_query.answer("Already processed.")
+            return
+
+        tag, theme_title, _ = get_today_theme()
+        cats = " ".join([f"#{c.replace(' ', '')}" for c in (conf['categories'] or [])])
+        channel_post = (
+            f"📝 <b>Confession #{conf_id}</b>\n\n"
+            f"{html.quote(conf['text'])}\n\n"
+            f"{cats} {tag}"
+        )
+
+        try:
+            if conf['photo_file_id']:
+                c_msg = await bot.send_photo(CHANNEL_ID, photo=conf['photo_file_id'], caption=channel_post)
+            else:
+                c_msg = await bot.send_message(CHANNEL_ID, text=channel_post)
+
+            await conn.execute("UPDATE confessions SET status = 'approved', message_id = $1 WHERE id = $2", c_msg.message_id, conf_id)
+            await callback_query.answer("Approved and broadcasted!")
+            await safe_send_message(conf['user_id'], f"🎉 <b>Your confession #{conf_id} was approved and posted to the channel!</b>")
+        except Exception as e:
+            logging.error(f"Failed to post confession #{conf_id} to channel: {e}")
+            await callback_query.answer("Error posting to channel.", show_alert=True)
+
+@dp.callback_query(F.data.startswith("adm_rej_conf_"))
+async def handle_admin_reject_conf(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer("Unauthorized.", show_alert=True)
+        return
+
+    conf_id = int(callback_query.data.split("_")[-1])
+    if db:
+        async with db.acquire() as conn:
+            conf = await conn.fetchrow("SELECT user_id FROM confessions WHERE id = $1", conf_id)
+            await conn.execute("UPDATE confessions SET status = 'rejected' WHERE id = $1", conf_id)
+            if conf:
+                await safe_send_message(conf['user_id'], f"❌ <b>Your confession #{conf_id} was not approved for publication.</b>")
+    await callback_query.answer("Rejected.")
+
+@dp.callback_query(F.data == "cancel_action")
+async def cancel_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback_query.message.edit_text("Action cancelled.")
+    await callback_query.answer()
+
+@dp.message(Command("cancel"), StateFilter('*'))
+async def cancel_any_state(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Action cancelled.", reply_markup=ReplyKeyboardRemove())
+
+# ==========================================
+# MUSIC SYSTEM HANDLERS
+# ==========================================
+def register_music_handlers():
+    """Registers all User and Admin Music handlers onto the Dispatcher."""
+
+    def is_admin(user_id: int) -> bool:
+        return user_id == ADMIN_ID
+
+    # --- User Flow: /music ---
+    @dp.message(F.text == "/music")
+    async def cmd_music(message: types.Message, state: FSMContext):
+        await state.clear()
+        text = (
+            "🎵 <b>Music Dedication &amp; Invitation Sanctuary</b>\n\n"
+            "Share your favorite song and dedicate it anonymously to your campus crush, a special friend, "
+            "or the entire community.\n\n"
+            "✨ <b>How it works:</b>\n"
+            "1. Upload your audio file\n"
+            "2. Choose who it is for\n"
+            "3. Add a heartfelt anonymous message\n"
+            "4. Reviewed by admin &amp; broadcast directly to the channel with Telegram's native audio player ▶️\n\n"
+            "🔒 <i>Your identity is 100% cryptographic and never exposed.</i>"
+        )
+        await message.answer(text, reply_markup=get_user_music_menu())
+
+    @dp.callback_query(F.data == "user_music_menu_open")
+    async def cb_user_music_menu(callback_query: types.CallbackQuery, state: FSMContext):
+        await state.clear()
+        text = (
+            "🎵 <b>Music Dedication &amp; Invitation</b>\n\n"
+            "Send a song anonymously to someone special or the entire channel!\n\n"
+            "Select an option below:"
+        )
+        try:
+            await callback_query.message.edit_text(text, reply_markup=get_user_music_menu())
+        except TelegramBadRequest:
+            await callback_query.message.answer(text, reply_markup=get_user_music_menu())
         await callback_query.answer()
 
-@dp.message(ConfessionForm.waiting_for_text, F.text)
-async def receive_text_confession(message: types.Message, state: FSMContext):
-    if message.text.startswith('/'): return
-    await process_confession(message, state, text=message.text, photo_file_id=None)
+    @dp.callback_query(F.data == "user_music_back_home")
+    async def cb_music_back_home(callback_query: types.CallbackQuery, state: FSMContext):
+        await state.clear()
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            pass
+        await callback_query.answer("Returned.")
 
-# --- FIX 4: Photo caption length constraint ---
-@dp.message(ConfessionForm.waiting_for_text, F.photo)
-async def receive_photo_confession(message: types.Message, state: FSMContext):
-    photo_file_id = message.photo[-1].file_id
-    text = (message.caption or "").strip()
-    
-    if not text:
-        await message.answer("❌ Please add a caption to your photo. The caption is your confession text.")
-        return
-    
-    if len(text) > MAX_PHOTO_CAPTION_LEN:
-        await message.answer(f"❌ Caption is too long ({len(text)} characters). Telegram captions cannot exceed {MAX_PHOTO_CAPTION_LEN} characters.")
-        return
+    @dp.callback_query(F.data == "user_music_dedicate")
+    async def cb_start_dedication(callback_query: types.CallbackQuery, state: FSMContext):
+        await state.set_state(UserMusicDedicationForm.waiting_for_audio)
+        text = (
+            "🎵 <b>Step 1/3: Send Audio File</b>\n\n"
+            "Please send the song you would like to dedicate as a <b>Telegram Audio</b> file (MP3, M4A, FLAC, AAC, etc.).\n\n"
+            "💡 <i>Tip: Forwarding or uploading from Telegram Music channels or your device works seamlessly!</i>\n\n"
+            "Type /cancel at any time to abort."
+        )
+        await callback_query.message.answer(text)
+        await callback_query.answer()
 
-    file_size_mb = (message.photo[-1].file_size or 0) / (1024 * 1024)
-    if file_size_mb > MAX_PHOTO_SIZE_MB:
-        await message.answer(f"❌ Photo is too large ({file_size_mb:.1f}MB). Maximum size is {MAX_PHOTO_SIZE_MB}MB.")
-        return
-    
-    await process_confession(message, state, text=text, photo_file_id=photo_file_id)
+    @dp.message(UserMusicDedicationForm.waiting_for_audio, F.audio)
+    async def receive_user_audio(message: types.Message, state: FSMContext):
+        audio = message.audio
+        file_id = audio.file_id
+        title = audio.title or audio.file_name or "Untitled Audio"
+        if audio.performer:
+            title = f"{audio.performer} - {title}"
 
-async def process_confession(message: types.Message, state: FSMContext, text: str, photo_file_id: Optional[str] = None):
-    conf_text = text.strip()
-    user_id = message.from_user.id
-    state_data = await state.get_data()
-    selected_categories: List[str] = state_data.get("selected_categories", [])
-    
-    if not selected_categories:
-        await message.answer("⚠️ Category info lost. Please start again with /confess.")
-        await state.clear(); return
-    
-    if len(conf_text) < 10:
-        await message.answer("Confession too short (minimum 10 characters)."); return
-    
-    if not photo_file_id and len(conf_text) > MAX_TEXT_CONFESSION_LEN:
-        await message.answer(f"Confession too long (maximum {MAX_TEXT_CONFESSION_LEN} characters)."); return
-    
-    try:
-        # Zero-Tolerance Anti-Doxxing Safety Check
-        phone_match = re.search(r'(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', conf_text)
-        email_match = re.search(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', conf_text)
-        if phone_match or email_match:
-            await message.answer(
-                "⚠️ <b>Security & Anti-Doxxing Warning:</b>\n\n"
-                "Our automated safety filter detected a potential phone number or email address in your submission.\n"
-                "To maintain an absolute zero-identity safe vault, sharing personal contact details or doxxing is strictly prohibited.\n\n"
-                "Please edit and resubmit your confession without private contact details."
+        await state.update_data(
+            audio_file_id=file_id,
+            audio_title=title,
+            audio_duration=audio.duration
+        )
+        await state.set_state(UserMusicDedicationForm.selecting_recipient)
+
+        text = (
+            f"🎵 <b>Song Selected:</b> <i>{html.quote(title)}</i>\n\n"
+            "💌 <b>Step 2/3: Who is this song dedicated to?</b>\n"
+            "Choose a recipient category or enter a custom one:"
+        )
+        await message.answer(text, reply_markup=get_recipient_keyboard())
+
+    @dp.message(UserMusicDedicationForm.waiting_for_audio)
+    async def receive_wrong_file_for_audio(message: types.Message):
+        if message.text and message.text.startswith('/cancel'):
+            return
+        await message.answer(
+            "⚠️ <b>Invalid format:</b> Please send an <b>Audio file</b> (music track).\n"
+            "Voice notes or images cannot be used for channel music. Try forwarding an MP3 or uploading a song file, or type /cancel."
+        )
+
+    @dp.callback_query(UserMusicDedicationForm.selecting_recipient, F.data.startswith("recip_"))
+    async def handle_recipient_selection(callback_query: types.CallbackQuery, state: FSMContext):
+        choice = callback_query.data.replace("recip_", "")
+        recipient_map = {
+            "crush": ("crush", "❤️ My Crush"),
+            "special": ("someone_special", "💕 Someone Special"),
+            "everyone": ("everyone", "👥 Everyone / Members"),
+        }
+
+        if choice in recipient_map:
+            rtype, rtext = recipient_map[choice]
+            await state.update_data(recipient_type=rtype, recipient_text=rtext)
+            await state.set_state(UserMusicDedicationForm.waiting_for_message)
+            await callback_query.message.edit_text(
+                f"💌 <b>Recipient:</b> {rtext}\n\n"
+                "📝 <b>Step 3/3: Optional Dedication Message</b>\n\n"
+                "Write a heartfelt message, confession, or dedication note to accompany the song.\n\n"
+                "<i>Type your message below, or send /skip to leave it without a caption:</i>",
+                reply_markup=None
             )
+            await callback_query.answer()
+        elif choice == "custom":
+            await state.set_state(UserMusicDedicationForm.waiting_for_custom_recipient)
+            await callback_query.message.edit_text(
+                "✍️ <b>Custom Recipient</b>\n\n"
+                "Please type who this dedication is for (e.g. <i>'The girl in the library with the yellow notebook'</i>, <i>'Dorm Room 12'</i>):\n\n"
+                "<i>Remember: Do NOT include real full names or private phone numbers!</i>",
+                reply_markup=None
+            )
+            await callback_query.answer()
+
+    @dp.message(UserMusicDedicationForm.waiting_for_custom_recipient, F.text)
+    async def receive_custom_recipient(message: types.Message, state: FSMContext):
+        if message.text.startswith("/cancel"):
+            return
+        custom_text = message.text.strip()
+        if len(custom_text) < 2:
+            await message.answer("Please enter at least 2 characters for the recipient.")
+            return
+        if len(custom_text) > 100:
+            await message.answer("Recipient description is too long (max 100 characters).")
             return
 
-        active_prompt = state_data.get("active_prompt")
-        async with db.acquire() as conn:
-            async with conn.transaction():
-                conf_id = await conn.fetchval("""
-                    INSERT INTO confessions (text, user_id, categories, status, photo_file_id, prompt_text) 
-                    VALUES ($1, $2, $3::text[], 'pending', $4, $5) RETURNING id
-                """, conf_text, user_id, selected_categories, photo_file_id, active_prompt)
-                
-                await update_user_points(conn, user_id, POINTS_PER_CONFESSION)
-        
-        category_tags = " ".join([f"#{html.quote(cat)}" for cat in selected_categories])
-        kbd = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Approve", callback_data=f"approve_{conf_id}")],
-            [InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_{conf_id}")]
-        ])
-        
-        prompt_snippet = f"💡 <b>Prompt:</b> <i>\"{html.quote(active_prompt)}\"</i>\n\n" if active_prompt else ""
-        if photo_file_id:
+        formatted_recipient = f"💌 {custom_text}"
+        await state.update_data(recipient_type="custom", recipient_text=formatted_recipient)
+        await state.set_state(UserMusicDedicationForm.waiting_for_message)
+
+        await message.answer(
+            f"💌 <b>Recipient:</b> {html.quote(formatted_recipient)}\n\n"
+            "📝 <b>Step 3/3: Optional Dedication Message</b>\n\n"
+            "Write a heartfelt message, confession, or dedication note to accompany the song.\n\n"
+            "<i>Type your message below, or send /skip to proceed without a message:</i>"
+        )
+
+    @dp.message(UserMusicDedicationForm.waiting_for_message, F.text)
+    async def receive_dedication_message(message: types.Message, state: FSMContext):
+        if message.text.startswith("/cancel"):
+            return
+
+        msg_text = None
+        if not message.text.startswith("/skip"):
+            msg_text = message.text.strip()
+            if len(msg_text) > 800:
+                await message.answer("Message is too long (max 800 characters). Please send a shorter message or /skip.")
+                return
+
+        await state.update_data(dedication_message=msg_text)
+        await state.set_state(UserMusicDedicationForm.confirming_submission)
+
+        data = await state.get_data()
+        song_title = data.get("audio_title", "Untitled Song")
+        recip = data.get("recipient_text", "Someone Special")
+        user_msg = data.get("dedication_message")
+        msg_display = f'"{html.quote(user_msg)}"' if user_msg else "<i>None (Audio only)</i>"
+
+        confirm_text = (
+            "✨ <b>Confirm Your Music Dedication</b>\n\n"
+            f"🎵 <b>Song:</b> {html.quote(song_title)}\n"
+            f"💌 <b>For:</b> {html.quote(recip)}\n"
+            f"💬 <b>Message:</b> {msg_display}\n\n"
+            "🔒 <b>Privacy Guarantee:</b>\n"
+            "• You remain 100% anonymous.\n"
+            "• Your Telegram username and ID are NEVER exposed.\n"
+            "• Will be submitted to admin for moderation before publishing.\n\n"
+            "Ready to submit?"
+        )
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✅ Submit Dedication", callback_data="music_confirm_yes")
+        builder.button(text="❌ Cancel", callback_data="music_cancel")
+        builder.adjust(1, 1)
+
+        await message.answer(confirm_text, reply_markup=builder.as_markup())
+
+    @dp.callback_query(UserMusicDedicationForm.confirming_submission, F.data == "music_confirm_yes")
+    async def submit_music_dedication(callback_query: types.CallbackQuery, state: FSMContext):
+        data = await state.get_data()
+        user_id = callback_query.from_user.id
+        file_id = data.get("audio_file_id")
+        song_title = data.get("audio_title", "Untitled Song")
+        rtype = data.get("recipient_type", "custom")
+        rtext = data.get("recipient_text", "Someone Special")
+        ded_msg = data.get("dedication_message")
+
+        if not file_id:
+            await callback_query.answer("Session expired. Please try again with /music.", show_alert=True)
+            await state.clear()
+            return
+
+        sub_code = generate_submission_code()
+
+        try:
+            if db:
+                async with db.acquire() as conn:
+                    sub_id = await create_music_submission(
+                        conn=conn,
+                        code=sub_code,
+                        user_id=user_id,
+                        file_id=file_id,
+                        title=song_title,
+                        recipient_type=rtype,
+                        recipient_text=rtext,
+                        dedication_message=ded_msg
+                    )
+            else:
+                sub_id = 101
+
+            # Notify user
+            await callback_query.message.edit_text(
+                f"🎉 <b>Dedication Submitted Successfully!</b>\n\n"
+                f"<b>Submission ID:</b> <code>#{sub_code}</code>\n"
+                f"<b>Song:</b> {html.quote(song_title)}\n"
+                f"<b>For:</b> {html.quote(rtext)}\n\n"
+                "An admin will review your dedication. Once approved, it will be posted to the Telegram channel using Telegram's native audio player!\n\n"
+                "Thank you for sharing the music vibes! 🎵",
+                reply_markup=None
+            )
+            await callback_query.answer("Submitted!")
+
+            # Send moderation alert to Admin
+            msg_snippet = f'"{html.quote(ded_msg)}"' if ded_msg else "<i>(No message included)</i>"
             admin_caption = (
-                f"🖼️ <b>New Photo Confession Review</b>\n"
-                f"<b>ID:</b> #{conf_id}\n"
-                f"<b>Categories:</b> {category_tags}\n"
-                f"<b>User ID:</b> <code>{user_id}</code>\n\n"
-                f"{prompt_snippet}"
-                f"<b>Caption:</b>\n{html.quote(conf_text)}"
+                "🎵 <b>MUSIC DEDICATION REVIEW</b>\n\n"
+                f"<b>Submission ID:</b> <code>#{sub_code}</code>\n"
+                f"<b>From:</b> Anonymous (<code>UID:{user_id}</code>)\n"
+                f"<b>For:</b> {html.quote(rtext)}\n"
+                f"<b>Song:</b> {html.quote(song_title)}\n\n"
+                f"<b>Message:</b>\n{msg_snippet}"
             )
             if len(admin_caption) > 1024:
                 admin_caption = admin_caption[:1020] + "..."
-            
-            await bot.send_photo(chat_id=ADMIN_ID, photo=photo_file_id, caption=admin_caption, reply_markup=kbd)
-            await message.answer(f"✅ <b>Your photo confession (#{conf_id}) has been submitted for review! (+{POINTS_PER_CONFESSION} Aura 🏅)</b>")
-        else:
-            admin_msg_text = (
-                f"📝 <b>New Confession Review</b>\n"
-                f"<b>ID:</b> #{conf_id}\n"
-                f"<b>Categories:</b> {category_tags}\n"
-                f"<b>User ID:</b> <code>{user_id}</code>\n\n"
-                f"{prompt_snippet}"
-                f"<b>Text:</b>\n{html.quote(conf_text)}"
-            )
-            await bot.send_message(chat_id=ADMIN_ID, text=admin_msg_text, reply_markup=kbd)
-            await message.answer(f"✅ Your confession (#{conf_id}) has been submitted and is pending review! (+{POINTS_PER_CONFESSION} Aura 🏅)")
-        
-        logging.info(f"Confession #{conf_id} submitted by User ID {user_id}")
-    except Exception as e:
-        logging.error(f"Error processing confession from {user_id}: {e}", exc_info=True)
-        await message.answer("❌ An error occurred while submitting your confession.")
-    finally: 
-        await state.clear()
 
-# --- FIX 3: Admin Approval / Rejection Photo Caption Edit Fix ---
-@dp.callback_query(F.data.startswith("approve_"))
-async def handle_approve_confession(callback_query: types.CallbackQuery):
-    if callback_query.from_user.id != ADMIN_ID:
-        await callback_query.answer("Unauthorized.", show_alert=True); return
-    
-    try:
-        conf_id = int(callback_query.data.split("_")[1])
-    except (IndexError, ValueError):
-        await callback_query.answer("Invalid confession ID.", show_alert=True); return
-    
-    async with db.acquire() as conn:
-        conf = await conn.fetchrow("SELECT id, text, user_id, categories, status, photo_file_id, prompt_text FROM confessions WHERE id = $1", conf_id)
-        if not conf:
-            await callback_query.answer("Confession not found.", show_alert=True); return
-        if conf['status'] != 'pending':
-            await callback_query.answer(f"Already '{conf['status']}'.", show_alert=True); return
-    
-    try:
-        link = f"https://t.me/{bot_info.username}?start=view_{conf['id']}"
-        category_tags = " ".join([f"#{html.quote(cat)}" for cat in conf['categories'] or []])
-        channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)
-        ]])
-        prompt_line = f"💡 <b>Prompt:</b> <i>\"{html.quote(conf['prompt_text'])}\"</i>\n\n" if conf.get('prompt_text') else ""
+            mod_builder = InlineKeyboardBuilder()
+            mod_builder.button(text="✅ Approve & Post", callback_data=f"adm_appr_music_{sub_id}")
+            mod_builder.button(text="❌ Reject", callback_data=f"adm_rej_music_{sub_id}")
+            mod_builder.adjust(2)
 
-        theme = get_current_theme_config()
-        channel_header = theme["header_branding"]
-        header_text = f"<b>{channel_header} #{conf['id']}</b>"
+            if ADMIN_ID:
+                try:
+                    await bot.send_audio(
+                        chat_id=ADMIN_ID,
+                        audio=file_id,
+                        caption=admin_caption,
+                        title=song_title,
+                        reply_markup=mod_builder.as_markup()
+                    )
+                except Exception as e:
+                    logging.error(f"Failed to send music audio to admin {ADMIN_ID}: {e}")
+                    await bot.send_message(
+                        chat_id=ADMIN_ID,
+                        text=f"{admin_caption}\n\n⚠️ (Audio send error: {e})",
+                        reply_markup=mod_builder.as_markup()
+                    )
 
-        if conf['photo_file_id']:
-            channel_caption = f"{header_text}\n\n{prompt_line}{html.quote(conf['text'])}\n\n{category_tags}"
-            if len(channel_caption) > 1024:
-                channel_caption = channel_caption[:1020] + "..."
-            msg = await bot.send_photo(
-                chat_id=CHANNEL_ID,
-                photo=conf['photo_file_id'],
-                caption=channel_caption,
-                reply_markup=channel_kbd
-            )
-        else:
-            channel_post_text = f"{header_text}\n\n{prompt_line}{html.quote(conf['text'])}\n\n{category_tags}"
-            msg = await bot.send_message(chat_id=CHANNEL_ID, text=channel_post_text, reply_markup=channel_kbd)
-        
-        async with db.acquire() as conn:
-            await conn.execute("UPDATE confessions SET status = 'approved', message_id = $1 WHERE id = $2", msg.message_id, conf_id)
-        
-        await safe_send_message(conf['user_id'], f"✅ Your confession (#{conf_id}) has been approved!")
-        
-        # Proper editing based on whether message is photo or text
-        if callback_query.message.photo:
-            old_caption = callback_query.message.caption_html or ""
-            await callback_query.message.edit_caption(caption=f"{old_caption}\n\n-- ✅ Approved --", reply_markup=None)
-        else:
-            old_text = callback_query.message.html_text or ""
-            await callback_query.message.edit_text(text=f"{old_text}\n\n-- ✅ Approved --", reply_markup=None)
-        
-        await callback_query.answer(f"Confession #{conf_id} approved.")
-    except Exception as e:
-        logging.error(f"Error approving Confession {conf_id}: {e}", exc_info=True)
-        await callback_query.answer(f"Error: {str(e)[:100]}", show_alert=True)
-
-@dp.callback_query(F.data.startswith("reject_"))
-async def handle_reject_confession(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_ID:
-        await callback_query.answer("Unauthorized.", show_alert=True); return
-    
-    try:
-        conf_id = int(callback_query.data.split("_")[1])
-    except (IndexError, ValueError):
-        await callback_query.answer("Invalid confession ID.", show_alert=True); return
-    
-    is_photo = bool(callback_query.message.photo)
-    original_text = callback_query.message.caption_html if is_photo else callback_query.message.html_text
-
-    await state.update_data(
-        rejecting_conf_id=conf_id,
-        is_photo=is_photo,
-        original_admin_text=original_text or "",
-        admin_review_message_id=callback_query.message.message_id
-    )
-    await state.set_state(AdminActions.waiting_for_rejection_reason)
-    
-    reason_keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="/skip")], [KeyboardButton(text="/cancel")]],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-    await callback_query.answer("Provide rejection reason")
-    await bot.send_message(
-        callback_query.from_user.id,
-        f"Reason for rejecting Confession #{conf_id}?\nUse /skip or /cancel.",
-        reply_markup=reason_keyboard
-    )
-
-@dp.message(AdminActions.waiting_for_rejection_reason, F.text)
-async def receive_rejection_reason(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    conf_id = data.get("rejecting_conf_id")
-    is_photo = data.get("is_photo", False)
-    original_admin_text = data.get("original_admin_text", "")
-    admin_review_message_id = data.get("admin_review_message_id")
-
-    if not conf_id: 
-        await message.answer("Error: Context lost.", reply_markup=ReplyKeyboardRemove())
-        await state.clear(); return
-
-    if message.text.startswith("/skip"): 
-        reason = None
-        reason_text_for_user = "Your confession was rejected."
-    elif message.text.startswith("/cancel"): 
-        await message.answer("Rejection cancelled.", reply_markup=ReplyKeyboardRemove())
-        await state.clear(); return
-    else: 
-        reason = message.text.strip()
-        reason_text_for_user = f"Your confession was rejected for the following reason:\n<i>{html.quote(reason)}</i>"
-    
-    async with db.acquire() as conn:
-        conf_data = await conn.fetchrow("SELECT user_id, categories FROM confessions WHERE id = $1 AND status = 'pending'", conf_id)
-        if not conf_data: 
-            await message.answer("Error: Confession no longer pending.", reply_markup=ReplyKeyboardRemove())
-            await state.clear(); return
-
-        await conn.execute("UPDATE confessions SET status = 'rejected', rejection_reason = $1 WHERE id = $2", reason, conf_id)
-        category_tags = " ".join([f"#{html.quote(cat)}" for cat in conf_data['categories'] or []])
-        await safe_send_message(conf_data['user_id'], f"❌ {reason_text_for_user}\n(Confession ID: #{conf_id}, Categories: {category_tags})")
-        
-        updated_note = f"{original_admin_text}\n\n-- ❌ Rejected --\nReason: {html.quote(reason or 'Skipped')}"
-        try:
-            if is_photo:
-                await bot.edit_message_caption(chat_id=ADMIN_ID, message_id=admin_review_message_id, caption=updated_note[:1024], reply_markup=None)
-            else:
-                await bot.edit_message_text(chat_id=ADMIN_ID, message_id=admin_review_message_id, text=updated_note, reply_markup=None)
         except Exception as e:
-            logging.error(f"Could not edit admin review message {admin_review_message_id}: {e}")
-            
-        await message.answer(f"Confession #{conf_id} rejected.", reply_markup=ReplyKeyboardRemove())
-    await state.clear()
+            logging.error(f"Error saving music dedication: {e}", exc_info=True)
+            await callback_query.message.edit_text("❌ An error occurred while submitting your dedication. Please try again later.")
+        finally:
+            await state.clear()
 
-# --- Comments Flow ---
-@dp.callback_query(F.data.startswith("browse_"))
-async def browse_comments_action(callback_query: types.CallbackQuery):
-    conf_id = int(callback_query.data.split("_", 1)[1])
-    await callback_query.answer("Loading comments...")
-    await show_comments_for_confession(callback_query.from_user.id, conf_id, callback_query.message)
+    @dp.callback_query(F.data == "music_cancel")
+    async def cancel_music_flow(callback_query: types.CallbackQuery, state: FSMContext):
+        await state.clear()
+        try:
+            await callback_query.message.edit_text("❌ Music dedication cancelled.", reply_markup=None)
+        except TelegramBadRequest:
+            await callback_query.message.answer("❌ Music dedication cancelled.")
+        await callback_query.answer("Cancelled.")
 
-@dp.callback_query(F.data.startswith("add_"))
-async def add_comment_prompt(callback_query: types.CallbackQuery, state: FSMContext):
-    conf_id = int(callback_query.data.split("_", 1)[1])
-    await state.update_data(confession_id=conf_id, parent_comment_id=None)
-    await state.set_state(CommentForm.waiting_for_comment)
-    await safe_send_message(callback_query.from_user.id, f"📝 You are adding a comment to Confession #{conf_id}.\nPlease send text, a sticker, or a GIF, or /cancel.")
-    await callback_query.answer()
+    # --- Admin Moderation: Approve / Reject ---
+    @dp.callback_query(F.data.startswith("adm_appr_music_"))
+    async def handle_admin_approve_music(callback_query: types.CallbackQuery):
+        if not is_admin(callback_query.from_user.id):
+            await callback_query.answer("Unauthorized.", show_alert=True)
+            return
 
-@dp.callback_query(F.data.startswith("comments_page_"))
-async def comments_page_callback(callback_query: types.CallbackQuery):
-    _, _, conf_id, page = callback_query.data.split("_")
-    await callback_query.answer("Loading page...")
-    await show_comments_for_confession(callback_query.from_user.id, int(conf_id), callback_query.message, page=int(page))
+        sub_id = int(callback_query.data.split("_")[-1])
+        if not db:
+            await callback_query.answer("DB unavailable.")
+            return
 
-@dp.message(CommentForm.waiting_for_comment, F.text | F.sticker | F.animation)
-async def receive_comment(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    data = await state.get_data()
-    conf_id = data.get("confession_id")
-    if not conf_id: 
-        await message.answer("⚠️ Session context lost. Please try again.")
-        await state.clear(); return
-
-    comm_text, sticker_id, animation_id, log_type = None, None, None, "Unknown"
-    if message.text: comm_text, log_type = message.text.strip(), "Text"
-    elif message.sticker: sticker_id, log_type = message.sticker.file_id, "Sticker"
-    elif message.animation: animation_id, log_type = message.animation.file_id, "GIF"
-    else: 
-        await message.answer("Invalid content. Please send text, sticker, or GIF."); return
-
-    try:
         async with db.acquire() as conn:
-            async with conn.transaction():
-                conf_owner_id = await conn.fetchval("SELECT user_id FROM confessions WHERE id = $1 AND status = 'approved'", conf_id)
-                if not conf_owner_id: raise Exception("Confession not found or not approved.")
-                await conn.execute("""
-                    INSERT INTO comments (confession_id, user_id, text, sticker_file_id, animation_file_id) 
-                    VALUES ($1, $2, $3, $4, $5)
-                """, conf_id, user_id, comm_text, sticker_id, animation_id)
-        
-        await message.answer(f"💬 Your reflection has been added! (+{POINTS_PER_COMMENT} Aura 🏅)")
+            sub = await get_music_submission_by_id(conn, sub_id)
+
+        if not sub:
+            await callback_query.answer("Submission not found.", show_alert=True)
+            return
+        if sub['status'] != 'pending':
+            await callback_query.answer(f"Already {sub['status']}.", show_alert=True)
+            return
+
+        song_title = sub['title']
+        rtext = sub['recipient_text']
+        user_msg = sub['dedication_message']
+
+        msg_body = f"\n\n💬 <i>\"{html.quote(user_msg)}\"</i>" if user_msg else ""
+        channel_caption = (
+            "🎵 <b>Music Dedication</b>\n\n"
+            f"💌 <b>For:</b> {html.quote(rtext)}"
+            f"{msg_body}\n\n"
+            "🔒 <i>Anonymous Dedication</i> • #MWUConfessions"
+        )
+        if len(channel_caption) > 1024:
+            channel_caption = channel_caption[:1020] + "..."
+
+        try:
+            channel_msg = await bot.send_audio(
+                chat_id=CHANNEL_ID,
+                audio=sub['telegram_file_id'],
+                caption=channel_caption,
+                title=song_title
+            )
+
+            async with db.acquire() as conn:
+                await update_submission_status(
+                    conn=conn,
+                    sub_id=sub_id,
+                    status="approved",
+                    channel_msg_id=channel_msg.message_id
+                )
+
+            old_cap = callback_query.message.caption_html or callback_query.message.html_text or ""
+            await callback_query.message.edit_caption(
+                caption=f"{old_cap}\n\n-- ✅ Approved &amp; Posted to Channel --",
+                reply_markup=None
+            )
+
+            await safe_send_message(
+                sub['user_id'],
+                f"🎉 <b>Your music dedication (#{sub['submission_code']}) was approved and posted to the channel!</b>\n\n"
+                f"🎵 Song: <b>{html.quote(song_title)}</b>\n"
+                f"Thank you for sharing with the community!"
+            )
+            await callback_query.answer(f"Dedication #{sub['submission_code']} published!")
+
+        except Exception as e:
+            logging.error(f"Error publishing music dedication #{sub_id} to channel: {e}", exc_info=True)
+            await callback_query.answer(f"Error posting to channel: {str(e)[:100]}", show_alert=True)
+
+    @dp.callback_query(F.data.startswith("adm_rej_music_"))
+    async def handle_admin_reject_music(callback_query: types.CallbackQuery):
+        if not is_admin(callback_query.from_user.id):
+            await callback_query.answer("Unauthorized.", show_alert=True)
+            return
+
+        sub_id = int(callback_query.data.split("_")[-1])
+        if not db:
+            return
+
         async with db.acquire() as conn:
-            await update_user_points(conn, user_id, POINTS_PER_COMMENT)
-        await update_channel_post_button(conf_id)
-        if conf_owner_id and conf_owner_id != user_id:
-            link = f"https://t.me/{bot_info.username}?start=view_{conf_id}"
-            preview = html.quote(comm_text[:120]) if comm_text else f"[{log_type}]"
-            await safe_send_message(conf_owner_id, f"💌 <b>Someone left a supportive reflection on your Confession #{conf_id}!</b>\n\n<i>\"{preview}...\"</i>\n\n<a href='{link}'>Click here to view and reply anonymously.</a>", disable_web_page_preview=True)
-        await show_comments_for_confession(user_id, conf_id)
-    except Exception as e:
-        logging.error(f"Error saving {log_type} comment for Conf #{conf_id} by {user_id}: {e}", exc_info=True)
-        await message.answer("❌ Error saving comment. The confession may have been removed.")
-    finally: 
+            sub = await get_music_submission_by_id(conn, sub_id)
+            if not sub:
+                await callback_query.answer("Submission not found.", show_alert=True)
+                return
+            if sub['status'] != 'pending':
+                await callback_query.answer(f"Already {sub['status']}.", show_alert=True)
+                return
+
+            await update_submission_status(
+                conn=conn,
+                sub_id=sub_id,
+                status="rejected",
+                rejection_reason="Did not meet channel community guidelines"
+            )
+
+        old_cap = callback_query.message.caption_html or callback_query.message.html_text or ""
+        try:
+            await callback_query.message.edit_caption(
+                caption=f"{old_cap}\n\n-- ❌ Rejected by Admin --",
+                reply_markup=None
+            )
+        except TelegramBadRequest:
+            pass
+
+        await safe_send_message(
+            sub['user_id'],
+            f"❌ <b>Your music dedication (#{sub['submission_code']}) was reviewed and not approved for channel posting.</b>"
+        )
+        await callback_query.answer("Dedication rejected.")
+
+    # --- Admin Feature 1: Music Library & Management ---
+    @dp.message(F.text == "/adminmusic")
+    async def cmd_admin_music(message: types.Message):
+        if not is_admin(message.from_user.id):
+            return
+
+        lib_count = 0
+        pend_count = 0
+        if db:
+            async with db.acquire() as conn:
+                lib_count = await count_music_library(conn)
+                pend_count = await count_pending_submissions(conn)
+
+        text = (
+            "🎵 <b>Admin Music Management Panel</b>\n\n"
+            f"📋 <b>Library Songs:</b> {lib_count}\n"
+            f"📨 <b>Pending Dedications:</b> {pend_count}\n\n"
+            "Select an action below:"
+        )
+        await message.answer(text, reply_markup=get_admin_music_menu())
+
+    @dp.callback_query(F.data == "admin_music_main")
+    async def cb_admin_music_main(callback_query: types.CallbackQuery, state: FSMContext):
+        if not is_admin(callback_query.from_user.id):
+            await callback_query.answer("Unauthorized.", show_alert=True)
+            return
         await state.clear()
 
-# --- FIX 8: Robust Reply Flow without strict ForceReply dependency ---
-@dp.callback_query(F.data.startswith("reply_"))
-async def reply_comment_prompt(callback_query: types.CallbackQuery, state: FSMContext):
-    parent_id = int(callback_query.data.split("_", 1)[1])
-    async with db.acquire() as conn:
-        comm_data = await conn.fetchrow("SELECT confession_id, text, sticker_file_id, animation_file_id, user_id FROM comments WHERE id = $1", parent_id)
-    if not comm_data: 
-        await callback_query.answer("Comment no longer exists.", show_alert=True); return
-    if callback_query.from_user.id == comm_data['user_id']: 
-        await callback_query.answer("You cannot reply to yourself.", show_alert=True); return
+        lib_count = 0
+        pend_count = 0
+        if db:
+            async with db.acquire() as conn:
+                lib_count = await count_music_library(conn)
+                pend_count = await count_pending_submissions(conn)
 
-    try:
-        if comm_data['text']:
-            await safe_send_message(callback_query.from_user.id, f"<i>Replying to:</i>\n\n{html.quote(comm_data['text'])}")
-        elif comm_data['sticker_file_id']:
-            await bot.send_sticker(callback_query.from_user.id, sticker=comm_data['sticker_file_id'])
-        elif comm_data['animation_file_id']:
-            await bot.send_animation(callback_query.from_user.id, animation=comm_data['animation_file_id'])
-        
-        prompt_message = await bot.send_message(
-            callback_query.from_user.id,
-            "⬆️ Please send your reply now (text, sticker, or GIF), or type /cancel.",
-            reply_markup=ForceReply(input_field_placeholder="Your reply...")
+        text = (
+            "🎵 <b>Admin Music Management Panel</b>\n\n"
+            f"📋 <b>Library Songs:</b> {lib_count}\n"
+            f"📨 <b>Pending Dedications:</b> {pend_count}\n\n"
+            "Select an action below:"
         )
-        
-        await state.update_data(
-            confession_id=comm_data['confession_id'],
-            parent_comment_id=parent_id,
-            message_id_to_reply_to=prompt_message.message_id 
-        )
-        await state.set_state(CommentForm.waiting_for_reply)
+        try:
+            await callback_query.message.edit_text(text, reply_markup=get_admin_music_menu())
+        except TelegramBadRequest:
+            await callback_query.message.answer(text, reply_markup=get_admin_music_menu())
         await callback_query.answer()
-    except Exception as e:
-        logging.error(f"Error starting reply prompt: {e}", exc_info=True)
-        await callback_query.answer("Could not start reply process.", show_alert=True)
+
+    @dp.callback_query(F.data == "admin_music_close")
+    async def cb_admin_music_close(callback_query: types.CallbackQuery):
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            pass
+        await callback_query.answer("Closed.")
+
+    @dp.callback_query(F.data == "admin_music_add")
+    async def cb_admin_music_add(callback_query: types.CallbackQuery, state: FSMContext):
+        if not is_admin(callback_query.from_user.id):
+            await callback_query.answer("Unauthorized.", show_alert=True)
+            return
+
+        await state.set_state(AdminMusicForm.waiting_for_audio)
+        text = (
+            "🎵 <b>Add / Post Music</b>\n\n"
+            "Please send the audio file you want to add to the library or post to the channel.\n\n"
+            "<i>Send an MP3/M4A/FLAC file or type /cancel to abort.</i>"
+        )
+        await callback_query.message.answer(text)
+        await callback_query.answer()
+
+    @dp.message(AdminMusicForm.waiting_for_audio, F.audio)
+    async def admin_receive_audio(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+
+        audio = message.audio
+        detected_title = audio.title or audio.file_name or "Untitled Song"
+        if audio.performer:
+            detected_title = f"{audio.performer} - {detected_title}"
+
+        await state.update_data(
+            audio_file_id=audio.file_id,
+            detected_title=detected_title
+        )
+        await state.set_state(AdminMusicForm.waiting_for_title)
+
+        text = (
+            f"🎵 <b>Audio Received!</b>\n\n"
+            f"<b>Detected Title:</b> <code>{html.quote(detected_title)}</code>\n\n"
+            "Send a custom song title, or send /keep to keep the detected title:"
+        )
+        await message.answer(text)
+
+    @dp.message(AdminMusicForm.waiting_for_title, F.text)
+    async def admin_receive_title(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        if message.text.startswith("/cancel"):
+            await state.clear()
+            await message.answer("Cancelled.")
+            return
+
+        data = await state.get_data()
+        final_title = data.get("detected_title", "Untitled") if message.text.startswith("/keep") else message.text.strip()
+
+        await state.update_data(final_title=final_title)
+        await state.set_state(AdminMusicForm.waiting_for_caption)
+
+        text = (
+            f"🎵 <b>Title Set:</b> <i>{html.quote(final_title)}</i>\n\n"
+            "📝 <b>Optional Caption/Message:</b>\n"
+            "Enter a caption/message to display with this song when posted to the channel, or send /skip:"
+        )
+        await message.answer(text)
+
+    @dp.message(AdminMusicForm.waiting_for_caption, F.text)
+    async def admin_receive_caption(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        if message.text.startswith("/cancel"):
+            await state.clear()
+            await message.answer("Cancelled.")
+            return
+
+        caption = None if message.text.startswith("/skip") else message.text.strip()
+        data = await state.get_data()
+        file_id = data.get("audio_file_id")
+        title = data.get("final_title", "Untitled")
+
+        music_id = 1
+        if db:
+            async with db.acquire() as conn:
+                music_id = await insert_music_to_library(
+                    conn=conn,
+                    file_id=file_id,
+                    title=title,
+                    caption=caption,
+                    admin_id=message.from_user.id
+                )
+
+        builder = InlineKeyboardBuilder()
+        builder.button(text="📢 Post to Channel Now", callback_data=f"adm_post_now_{music_id}")
+        builder.button(text="📋 View in Library", callback_data="admin_music_library_1")
+        builder.button(text="❌ Done", callback_data="admin_music_close")
+        builder.adjust(1, 1, 1)
+
+        cap_disp = f'"{html.quote(caption)}"' if caption else "<i>None</i>"
+        text = (
+            "✅ <b>Song Added to Library!</b>\n\n"
+            f"<b>ID:</b> #{music_id}\n"
+            f"<b>Title:</b> {html.quote(title)}\n"
+            f"<b>Caption:</b> {cap_disp}\n\n"
+            "Would you like to broadcast this song to the channel now?"
+        )
+        await message.answer(text, reply_markup=builder.as_markup())
         await state.clear()
 
-@dp.message(CommentForm.waiting_for_reply, F.text | F.sticker | F.animation)
-async def receive_reply(message: types.Message, state: FSMContext):
-    if message.text and message.text.startswith('/cancel'):
-        await cancel_any_state(message, state)
+    @dp.callback_query(F.data.startswith("adm_post_now_"))
+    async def handle_admin_post_now(callback_query: types.CallbackQuery):
+        if not is_admin(callback_query.from_user.id):
+            await callback_query.answer("Unauthorized.", show_alert=True)
+            return
+
+        music_id = int(callback_query.data.split("_")[-1])
+        if not db:
+            return
+
+        async with db.acquire() as conn:
+            song = await get_music_by_id(conn, music_id)
+
+        if not song:
+            await callback_query.answer("Song not found.", show_alert=True)
+            return
+
+        title = song['title']
+        caption = song['caption']
+        post_caption = f"🎵 <b>{html.quote(title)}</b>"
+        if caption:
+            post_caption += f"\n\n{html.quote(caption)}"
+        post_caption += "\n\n📻 #MWUMusic • #MWUConfessions"
+
+        if len(post_caption) > 1024:
+            post_caption = post_caption[:1020] + "..."
+
+        try:
+            await bot.send_audio(
+                chat_id=CHANNEL_ID,
+                audio=song['telegram_file_id'],
+                caption=post_caption,
+                title=title
+            )
+
+            async with db.acquire() as conn:
+                await increment_music_posted_count(conn, music_id)
+
+            await callback_query.message.edit_text(
+                f"✅ <b>Successfully posted to channel!</b>\n\n"
+                f"🎵 <b>Title:</b> {html.quote(title)}\n"
+                "Users can now play it directly in Telegram.",
+                reply_markup=get_admin_music_menu()
+            )
+            await callback_query.answer("Posted to channel!")
+
+        except Exception as e:
+            logging.error(f"Failed to post song #{music_id} to channel: {e}", exc_info=True)
+            await callback_query.answer(f"Failed to post: {str(e)[:100]}", show_alert=True)
+
+    # --- Library Pagination ---
+    @dp.callback_query(F.data.startswith("admin_music_library_"))
+    async def view_music_library(callback_query: types.CallbackQuery):
+        if not is_admin(callback_query.from_user.id):
+            await callback_query.answer("Unauthorized.", show_alert=True)
+            return
+
+        if not db:
+            await callback_query.answer("DB not available.")
+            return
+
+        page = int(callback_query.data.split("_")[-1])
+        page_size = 5
+
+        async with db.acquire() as conn:
+            total = await count_music_library(conn)
+            if total == 0:
+                text = (
+                    "📋 <b>Music Library is Empty</b>\n\n"
+                    "You haven't added any songs to the library yet.\n"
+                    "Use <b>➕ Add Music</b> to upload audio tracks."
+                )
+                builder = InlineKeyboardBuilder()
+                builder.button(text="➕ Add Music", callback_data="admin_music_add")
+                builder.button(text="⬅️ Back", callback_data="admin_music_main")
+                builder.adjust(1)
+                await callback_query.message.edit_text(text, reply_markup=builder.as_markup())
+                await callback_query.answer()
+                return
+
+            total_pages = (total + page_size - 1) // page_size
+            page = max(1, min(page, total_pages))
+            offset = (page - 1) * page_size
+            songs = await get_music_library_page(conn, limit=page_size, offset=offset)
+
+        builder = InlineKeyboardBuilder()
+        text_lines = [f"📋 <b>Music Library (Page {page}/{total_pages} • Total: {total})</b>\n"]
+
+        for s in songs:
+            sid = s['id']
+            stitle = html.quote(s['title'][:40])
+            pcount = s['posted_count']
+            text_lines.append(f"• #{sid} <b>{stitle}</b> (Posted {pcount}x)")
+            builder.row(
+                InlineKeyboardButton(text=f"📢 Post #{sid}", callback_data=f"adm_post_now_{sid}"),
+                InlineKeyboardButton(text=f"🗑️ Del #{sid}", callback_data=f"adm_del_music_{sid}")
+            )
+
+        nav_row = []
+        if page > 1:
+            nav_row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"admin_music_library_{page-1}"))
+        if total_pages > 1:
+            nav_row.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"admin_music_library_{page+1}"))
+        if nav_row:
+            builder.row(*nav_row)
+
+        builder.row(
+            InlineKeyboardButton(text="➕ Add Music", callback_data="admin_music_add"),
+            InlineKeyboardButton(text="⬅️ Main Menu", callback_data="admin_music_main")
+        )
+
+        try:
+            await callback_query.message.edit_text("\n".join(text_lines), reply_markup=builder.as_markup())
+        except TelegramBadRequest:
+            pass
+        await callback_query.answer()
+
+    @dp.callback_query(F.data.startswith("adm_del_music_"))
+    async def handle_admin_delete_music(callback_query: types.CallbackQuery):
+        if not is_admin(callback_query.from_user.id):
+            await callback_query.answer("Unauthorized.", show_alert=True)
+            return
+
+        if not db:
+            return
+
+        music_id = int(callback_query.data.split("_")[-1])
+        async with db.acquire() as conn:
+            success = await delete_music_by_id(conn, music_id)
+
+        if success:
+            await callback_query.answer(f"Song #{music_id} deleted from library.", show_alert=True)
+        else:
+            await callback_query.answer("Song not found.", show_alert=True)
+
+        callback_query.data = "admin_music_library_1"
+        await view_music_library(callback_query)
+
+    # --- Pending Dedications Queue ---
+    @dp.callback_query(F.data.startswith("admin_music_pending_"))
+    async def view_pending_dedications(callback_query: types.CallbackQuery):
+        if not is_admin(callback_query.from_user.id):
+            await callback_query.answer("Unauthorized.", show_alert=True)
+            return
+
+        if not db:
+            await callback_query.answer("DB not available.")
+            return
+
+        page = int(callback_query.data.split("_")[-1])
+        page_size = 5
+
+        async with db.acquire() as conn:
+            total = await count_pending_submissions(conn)
+            if total == 0:
+                text = (
+                    "📨 <b>Pending Music Dedications</b>\n\n"
+                    "🎉 All caught up! No pending music dedications in the moderation queue."
+                )
+                builder = InlineKeyboardBuilder()
+                builder.button(text="⬅️ Back to Menu", callback_data="admin_music_main")
+                await callback_query.message.edit_text(text, reply_markup=builder.as_markup())
+                await callback_query.answer()
+                return
+
+            total_pages = (total + page_size - 1) // page_size
+            page = max(1, min(page, total_pages))
+            offset = (page - 1) * page_size
+            subs = await get_pending_submissions(conn, limit=page_size, offset=offset)
+
+        builder = InlineKeyboardBuilder()
+        text_lines = [f"📨 <b>Pending Dedications (Page {page}/{total_pages} • Total: {total})</b>\n"]
+
+        for sub in subs:
+            sub_id = sub['id']
+            code = sub['submission_code']
+            title = html.quote(sub['title'][:35])
+            recip = html.quote(sub['recipient_text'][:25])
+            text_lines.append(f"• <b>#{code}</b>: <i>{title}</i> → {recip}")
+            builder.row(
+                InlineKeyboardButton(text=f"🎧 Listen #{code}", callback_data=f"adm_play_sub_{sub_id}"),
+                InlineKeyboardButton(text=f"✅ #{code}", callback_data=f"adm_appr_music_{sub_id}"),
+                InlineKeyboardButton(text=f"❌ #{code}", callback_data=f"adm_rej_music_{sub_id}")
+            )
+
+        nav_row = []
+        if page > 1:
+            nav_row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"admin_music_pending_{page-1}"))
+        if total_pages > 1:
+            nav_row.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"admin_music_pending_{page+1}"))
+        if nav_row:
+            builder.row(*nav_row)
+
+        builder.row(InlineKeyboardButton(text="⬅️ Back to Main", callback_data="admin_music_main"))
+
+        try:
+            await callback_query.message.edit_text("\n".join(text_lines), reply_markup=builder.as_markup())
+        except TelegramBadRequest:
+            pass
+        await callback_query.answer()
+
+    @dp.callback_query(F.data.startswith("adm_play_sub_"))
+    async def admin_listen_submission(callback_query: types.CallbackQuery):
+        if not is_admin(callback_query.from_user.id):
+            await callback_query.answer("Unauthorized.", show_alert=True)
+            return
+
+        if not db:
+            return
+
+        sub_id = int(callback_query.data.split("_")[-1])
+        async with db.acquire() as conn:
+            sub = await get_music_submission_by_id(conn, sub_id)
+
+        if not sub:
+            await callback_query.answer("Submission not found.", show_alert=True)
+            return
+
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✅ Approve", callback_data=f"adm_appr_music_{sub_id}")
+        builder.button(text="❌ Reject", callback_data=f"adm_rej_music_{sub_id}")
+        builder.adjust(2)
+
+        msg_disp = f'"{html.quote(sub["dedication_message"])}"' if sub['dedication_message'] else "<i>None</i>"
+        caption = (
+            f"🎵 <b>Submission #{sub['submission_code']}</b>\n"
+            f"<b>Title:</b> {html.quote(sub['title'])}\n"
+            f"<b>For:</b> {html.quote(sub['recipient_text'])}\n"
+            f"<b>Message:</b> {msg_disp}"
+        )
+        try:
+            await bot.send_audio(
+                chat_id=callback_query.from_user.id,
+                audio=sub['telegram_file_id'],
+                caption=caption,
+                title=sub['title'],
+                reply_markup=builder.as_markup()
+            )
+            await callback_query.answer("Audio sent.")
+        except Exception as e:
+            logging.error(f"Error sending audio #{sub_id} to admin: {e}")
+            await callback_query.answer("Error playing audio.", show_alert=True)
+
+# --- Dynamic Theme Administration ---
+@dp.message(Command("settheme"))
+async def cmd_settheme(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    builder = InlineKeyboardBuilder()
+    for tid, tinfo in THEMES.items():
+        is_cur = " (Active)" if tid == CURRENT_ACTIVE_THEME else ""
+        builder.button(text=f"{tinfo['menu_label']}{is_cur}", callback_data=f"swtheme_{tid}")
+    builder.adjust(1)
+    await message.answer(
+        f"🎨 <b>Admin Community Theme Switcher</b>\n\n"
+        f"Current Active Theme: <b>{THEMES[CURRENT_ACTIVE_THEME]['name']}</b>\n\n"
+        "Select a theme below to activate instantly across the bot:",
+        reply_markup=builder.as_markup()
+    )
+
+@dp.callback_query(F.data.startswith("swtheme_"))
+async def handle_switch_theme(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer("Unauthorized.", show_alert=True)
         return
 
-    user_id = message.from_user.id
-    data = await state.get_data()
-    conf_id = data.get("confession_id")
-    parent_id = data.get("parent_comment_id")
-
-    if not conf_id or not parent_id:
-        await message.answer("⚠️ Reply context expired. Please click 'Reply' again or type /cancel.")
-        await state.clear(); return
-
-    reply_text, sticker_id, animation_id, log_type = None, None, None, "Unknown"
-    if message.text: reply_text, log_type = message.text.strip(), "Text Reply"
-    elif message.sticker: sticker_id, log_type = message.sticker.file_id, "Sticker Reply"
-    elif message.animation: animation_id, log_type = message.animation.file_id, "GIF Reply"
-    else: 
-        await message.answer("Invalid content type for a reply."); return
-    
-    try:
-        async with db.acquire() as conn:
-            async with conn.transaction():
-                parent_data = await conn.fetchrow("SELECT user_id FROM comments WHERE id = $1", parent_id)
-                if not parent_data: 
-                    await message.answer("⚠️ The comment you were replying to has been deleted.")
-                    await state.clear(); return
-                conf_data = await conn.fetchrow("SELECT user_id FROM confessions WHERE id = $1", conf_id)
-                
+    tid = callback_query.data.replace("swtheme_", "")
+    if tid in THEMES:
+        global CURRENT_ACTIVE_THEME
+        CURRENT_ACTIVE_THEME = tid
+        if db:
+            async with db.acquire() as conn:
                 await conn.execute("""
-                    INSERT INTO comments (confession_id, user_id, text, sticker_file_id, animation_file_id, parent_comment_id) 
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                """, conf_id, user_id, reply_text, sticker_id, animation_id, parent_id)
-        
-        await message.answer(f"↪️ Your reply has been sent! (+{POINTS_PER_COMMENT} Aura 🏅)", reply_markup=ReplyKeyboardRemove())
-        async with db.acquire() as conn:
-            await update_user_points(conn, user_id, POINTS_PER_COMMENT)
-        await update_channel_post_button(conf_id)
-        
-        if parent_data['user_id'] != user_id:
-            link = f"https://t.me/{bot_info.username}?start=view_{conf_id}"
-            preview = html.quote(reply_text[:120]) if reply_text else f"[{log_type.replace(' Reply', '')}]"
-            tag = "(Author)" if conf_data and user_id == conf_data['user_id'] else "Anonymous"
-            await safe_send_message(parent_data['user_id'], f"↪️ Someone ({tag}) replied to your comment on Confession #{conf_id}:\n\n<i>{preview}...</i>\n\n<a href='{link}'>Click here to view.</a>", disable_web_page_preview=True)
-        
-        await show_comments_for_confession(user_id, conf_id)
-    except Exception as e:
-        logging.error(f"Error saving reply: {e}", exc_info=True)
-        await message.answer("❌ Error saving reply.")
-    finally:
-        await state.clear()
+                    INSERT INTO system_config (key, value) VALUES ('active_theme', $1)
+                    ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP
+                """, tid)
 
-# --- Emotional Micro-Interactions & Real-Time Notifications ---
-@dp.callback_query(F.data.startswith("react_"))
-async def handle_reaction(callback_query: types.CallbackQuery):
-    parts = callback_query.data.split("_")
-    r_type = parts[1]
-    comm_id = int(parts[2])
-    user_id = callback_query.from_user.id
-    meta = get_reaction_meta(r_type)
-    point_delta, alert = 0, ""
-
-    async with db.acquire() as conn:
-        async with conn.transaction():
-            info = await conn.fetchrow("""
-                SELECT c.user_id as comm_uid, c.confession_id, co.user_id as conf_owner_id 
-                FROM comments c 
-                JOIN confessions co ON c.confession_id = co.id 
-                WHERE c.id = $1
-            """, comm_id)
-            if not info: await callback_query.answer("Comment not found.", show_alert=True); return
-            if info['comm_uid'] == user_id: await callback_query.answer("You cannot react to your own reflection.", show_alert=True); return
-
-            existing = await conn.fetchval("SELECT reaction_type FROM reactions WHERE comment_id = $1 AND user_id = $2", comm_id, user_id)
-            if existing:
-                if existing == r_type:
-                    await conn.execute("DELETE FROM reactions WHERE comment_id = $1 AND user_id = $2", comm_id, user_id)
-                    point_delta = -POINTS_PER_REACTION_RECEIVED
-                    alert = f"Removed {meta['emoji']}"
-                else:
-                    await conn.execute("UPDATE reactions SET reaction_type = $1 WHERE comment_id = $2 AND user_id = $3", r_type, comm_id, user_id)
-                    alert = f"Changed to {meta['label']} {meta['emoji']}"
-            else:
-                await conn.execute("INSERT INTO reactions (comment_id, user_id, reaction_type) VALUES ($1, $2, $3)", comm_id, user_id, r_type)
-                point_delta = POINTS_PER_REACTION_RECEIVED
-                alert = f"Added {meta['label']} {meta['emoji']}"
-
-                # Live automated notification to commenter
-                asyncio.create_task(safe_send_message(
-                    info['comm_uid'],
-                    f"{meta['emoji']} Someone felt your reflection on Confession #{info['confession_id']}:\n"
-                    f"<i>\"{meta['label']}\"</i> (+{POINTS_PER_REACTION_RECEIVED} Aura 🏅)"
-                ))
-
-                # Live notification to confession author (keeps them coming back)
-                if info['conf_owner_id'] != user_id and info['conf_owner_id'] != info['comm_uid']:
-                    asyncio.create_task(safe_send_message(
-                        info['conf_owner_id'],
-                        f"✨ A peer just shared support ({meta['emoji']} <i>{meta['label']}</i>) on your Confession #{info['confession_id']} thread!\n\n<i>You are heard and supported.</i>"
-                    ))
-
-            if point_delta != 0: await update_user_points(conn, info['comm_uid'], point_delta)
-    
-    kbd = await build_comment_keyboard(comm_id, info['comm_uid'], user_id, info['conf_owner_id'])
-    try: 
-        await callback_query.message.edit_reply_markup(reply_markup=kbd)
-        await callback_query.answer(alert)
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e).lower(): logging.warning(f"Reaction edit markup failed: {e}")
-        else: await callback_query.answer(alert)
-
-# --- Reporting ---
-@dp.callback_query(F.data.startswith("report_confirm_"))
-async def report_confirm_callback(callback_query: types.CallbackQuery):
-    comment_id = int(callback_query.data.split("_")[-1])
-    reporter_user_id = callback_query.from_user.id
-    async with db.acquire() as conn:
-        comment_data = await conn.fetchrow("SELECT text, user_id FROM comments WHERE id = $1", comment_id)
-        if not comment_data: await callback_query.answer("Comment deleted.", show_alert=True); return
-        if comment_data['user_id'] == reporter_user_id: await callback_query.answer("You cannot report yourself.", show_alert=True); return
-    snippet = html.quote(comment_data['text'][:100]) if comment_data['text'] else "[Media/Sticker]"
-    confirm_text = f"Are you sure you want to report this comment for admin review?\n\n<i>\"{snippet}...\"</i>"
-    kbd = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Yes, Report", callback_data=f"report_execute_{comment_id}"), 
-        InlineKeyboardButton(text="❌ No, Cancel", callback_data="report_cancel")
-    ]])
-    await safe_send_message(reporter_user_id, confirm_text, reply_markup=kbd)
-    await callback_query.answer()
-
-@dp.callback_query(F.data.startswith("report_execute_"))
-async def report_execute_callback(callback_query: types.CallbackQuery):
-    comment_id = int(callback_query.data.split("_")[-1])
-    reporter_user_id = callback_query.from_user.id
-    try:
-        async with db.acquire() as conn:
-            async with conn.transaction():
-                comment_data = await conn.fetchrow("SELECT user_id, confession_id, text, sticker_file_id, animation_file_id FROM comments WHERE id = $1", comment_id)
-                if not comment_data: 
-                    await callback_query.message.edit_text("Report failed: Comment no longer exists."); return
-                reported_user_id = comment_data['user_id']
-                if reported_user_id == reporter_user_id: 
-                    await callback_query.message.edit_text("Action cancelled: Cannot report own comment."); return
-                await conn.execute("""
-                    INSERT INTO reports (comment_id, reporter_user_id, reported_user_id) 
-                    VALUES ($1, $2, $3) 
-                    ON CONFLICT (comment_id, reporter_user_id) DO NOTHING
-                """, comment_id, reporter_user_id, reported_user_id)
-        snippet = html.quote(comment_data['text'][:200]) if comment_data['text'] else "[Media]"
-        conf_link = f"https://t.me/{bot_info.username}?start=view_{comment_data['confession_id']}"
-        admin_notification = (
-            f"⚠️ <b>New Comment Report</b> ⚠️\n\n"
-            f"<b>Confession:</b> <a href='{conf_link}'>#{comment_data['confession_id']}</a>\n"
-            f"<b>Comment ID:</b> <code>{comment_id}</code>\n<b>Content:</b>\n<i>{snippet}</i>\n\n"
-            f"<b>Reported User:</b> <code>{reported_user_id}</code>\n<b>Reporter:</b> <code>{reporter_user_id}</code>"
+        await callback_query.message.edit_text(
+            f"✅ <b>Theme Activated:</b> {THEMES[tid]['name']}\n"
+            f"Branding: <code>{THEMES[tid]['header_branding']}</code>\n"
+            f"Tag: <code>{THEMES[tid]['tag']}</code>\n\n"
+            "All /start greetings, banners, and categories updated!"
         )
-        await safe_send_message(ADMIN_ID, admin_notification, disable_web_page_preview=True)
-        await callback_query.message.edit_text("✅ Your report has been submitted. The admin has been notified.", reply_markup=None)
-        await callback_query.answer("Report sent.")
-    except Exception as e:
-        logging.error(f"Error executing report for comment {comment_id} by {reporter_user_id}: {e}")
-        await callback_query.message.edit_text("❌ An error occurred while reporting.")
-        await callback_query.answer("Error.", show_alert=True)
+        await callback_query.answer("Theme updated!")
 
-@dp.callback_query(F.data == "report_cancel")
-async def report_cancel_callback(callback_query: types.CallbackQuery):
-    await callback_query.message.edit_text("Report process cancelled.")
-    await callback_query.answer("Cancelled.")
+# --- Health check endpoint ---
+async def handle_health_check(request):
+    return web.Response(text="Telegram Confession & Music Bot OK")
 
-# --- FIX 9: Contact Request & Response ---
-@dp.callback_query(F.data.startswith("req_contact_"))
-async def handle_request_contact(callback_query: types.CallbackQuery):
-    comm_id = int(callback_query.data.split("_")[-1])
-    requester_uid = callback_query.from_user.id
-    async with db.acquire() as conn:
-        async with conn.transaction():
-            comm_data = await conn.fetchrow("""
-                SELECT c.user_id as comm_uid, c.text, co.id as conf_id, co.user_id as conf_owner_id 
-                FROM comments c 
-                JOIN confessions co ON c.confession_id = co.id 
-                WHERE c.id = $1
-            """, comm_id)
-            if not comm_data: await callback_query.answer("Comment not found.", show_alert=True); return
-            commenter_uid, conf_id, conf_owner_id = comm_data['comm_uid'], comm_data['conf_id'], comm_data['conf_owner_id']
-            if requester_uid != conf_owner_id: await callback_query.answer("Only the confession author can do this.", show_alert=True); return
-            if requester_uid == commenter_uid: await callback_query.answer("You cannot contact yourself.", show_alert=True); return
-            
-            existing_req = await conn.fetchval("SELECT status FROM contact_requests WHERE comment_id = $1 AND requester_user_id = $2", comm_id, requester_uid)
-            if existing_req and existing_req not in ['denied', 'failed_to_notify']:
-                await callback_query.answer(f"A contact request already exists (status: {existing_req}).", show_alert=True); return
-
-            req_id = await conn.fetchval("""
-                INSERT INTO contact_requests (confession_id, comment_id, requester_user_id, requested_user_id, status) 
-                VALUES ($1, $2, $3, $4, 'pending')
-                ON CONFLICT (comment_id, requester_user_id) DO UPDATE SET status = 'pending', updated_at = CURRENT_TIMESTAMP
-                RETURNING id
-            """, conf_id, comm_id, requester_uid, commenter_uid)
-
-            snippet = html.quote(comm_data['text'][:100]) if comm_data['text'] else "[Media]"
-            notification_to_commenter = (
-                f"🤝 The author of Confession #{conf_id} would like to contact you regarding your comment:\n\n"
-                f"<i>\"{snippet}...\"</i>\n\n"
-                "Do you approve sharing your Telegram @username with them? Your User ID is never shared."
-            )
-            kbd = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Approve & Share Username", callback_data=f"approve_contact_{req_id}")],
-                [InlineKeyboardButton(text="❌ Deny Request", callback_data=f"deny_contact_{req_id}")]
-            ])
-            sent = await safe_send_message(commenter_uid, notification_to_commenter, reply_markup=kbd)
-            if sent:
-                await callback_query.answer("✅ Contact request sent to the commenter.", show_alert=False)
-            else:
-                await conn.execute("UPDATE contact_requests SET status = 'failed_to_notify' WHERE id = $1", req_id)
-                await callback_query.answer("⚠️ Could not notify commenter (they may have blocked the bot).", show_alert=True)
-
-@dp.callback_query(F.data.startswith(("approve_contact_", "deny_contact_")))
-async def handle_contact_response(callback_query: types.CallbackQuery):
-    action, _, req_id_str = callback_query.data.partition("_contact_")
-    try:
-        req_id = int(req_id_str)
-    except ValueError:
-        await callback_query.answer("Invalid ID.", show_alert=True); return
-    
-    responder_uid = callback_query.from_user.id
-    async with db.acquire() as conn:
-        async with conn.transaction():
-            req_data = await conn.fetchrow("SELECT * FROM contact_requests WHERE id = $1", req_id)
-            if not req_data: await callback_query.answer("Request not found.", show_alert=True); return
-            if responder_uid != req_data['requested_user_id']: await callback_query.answer("This request is not for you.", show_alert=True); return
-            if req_data['status'] != 'pending': await callback_query.answer(f"Request already '{req_data['status']}'.", show_alert=True); return
-
-            author_uid = req_data['requester_user_id']
-            conf_id = req_data['confession_id']
-            
-            if action == "approve":
-                # Use callback user directly without redundant network call
-                username = callback_query.from_user.username
-                if not username:
-                    try:
-                        chat_info = await bot.get_chat(responder_uid)
-                        username = chat_info.username
-                    except Exception:
-                        username = None
-
-                if username:
-                    await conn.execute("UPDATE contact_requests SET status = 'approved', updated_at = CURRENT_TIMESTAMP WHERE id = $1", req_id)
-                    notification_to_author = f"✅ Contact Approved for Confession #{conf_id}!\nYou can contact the commenter at: @{html.quote(username)}"
-                    await callback_query.message.edit_text(callback_query.message.html_text + "\n\n-- ✅ Approved. Your username has been shared. --", reply_markup=None)
-                else:
-                    await conn.execute("UPDATE contact_requests SET status = 'approved_no_username', updated_at = CURRENT_TIMESTAMP WHERE id = $1", req_id)
-                    notification_to_author = f"⚠️ Contact Approved for Confession #{conf_id}, but commenter has no public @username."
-                    await callback_query.message.edit_text(callback_query.message.html_text + "\n\n-- Approved, but you have no public username to share. --", reply_markup=None)
-            else:
-                await conn.execute("UPDATE contact_requests SET status = 'denied', updated_at = CURRENT_TIMESTAMP WHERE id = $1", req_id)
-                notification_to_author = f"❌ The commenter for Confession #{conf_id} declined your contact request."
-                await callback_query.message.edit_text(callback_query.message.html_text + "\n\n-- ❌ Denied. The author has been notified. --", reply_markup=None)
-            
-            await safe_send_message(author_uid, notification_to_author)
-            await callback_query.answer("Response recorded.")
-
-# --- Fallback Handler ---
-@dp.message(StateFilter(None), F.text & ~F.text.startswith('/'))
-async def handle_text_without_state(message: types.Message):
-    await message.reply("Hi! 👋 Use /confess to share anonymously, /profile to see your history, or /help for commands.")
-
-# --- Main Execution ---
+# ==========================================
+# MAIN EXECUTION ENTRY POINT
+# ==========================================
 async def main():
     webhook_host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip()
     try:
         await setup()
-        if not db or not bot_info:
-            logging.critical("FATAL: Database or bot info missing after setup. Cannot start.")
-            return
+        register_music_handlers()
 
-        # Register middleware
         dp.message.middleware(BlockUserMiddleware())
         dp.callback_query.middleware(BlockUserMiddleware())
 
-        # Set bot commands
         commands = [
             types.BotCommand(command="start", description="Vault entrance & daily themes"),
             types.BotCommand(command="confess", description="Submit an anonymous confession"),
+            types.BotCommand(command="music", description="🎵 Dedicate a song anonymously"),
             types.BotCommand(command="prompt", description="Today's reflection prompt"),
             types.BotCommand(command="profile", description="Your Aura points & history"),
             types.BotCommand(command="leaderboard", description="Top supportive community peers"),
             types.BotCommand(command="rules", description="Zero-doxxing safety rules"),
             types.BotCommand(command="help", description="Show help and commands"),
-            types.BotCommand(command="privacy", description="View privacy information"),
             types.BotCommand(command="cancel", description="Cancel current action"),
         ]
         admin_commands = commands + [
+            types.BotCommand(command="adminmusic", description="ADMIN: 🎵 Music Library & Moderation"),
             types.BotCommand(command="settheme", description="ADMIN: Dynamic Community Theme Switcher"),
             types.BotCommand(command="postprompt", description="ADMIN: Post daily prompt to channel"),
-            types.BotCommand(command="id", description="ADMIN: Get user info"),
-            types.BotCommand(command="warn", description="ADMIN: Warn a user"),
-            types.BotCommand(command="block", description="ADMIN: Temporarily block a user"),
-            types.BotCommand(command="pblock", description="ADMIN: Permanently block a user"),
-            types.BotCommand(command="unblock", description="ADMIN: Unblock a user"),
+            types.BotCommand(command="rules", description="ADMIN: View safety rules"),
         ]
-        await bot.set_my_commands(commands)
-        await bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(chat_id=ADMIN_ID))
+        if bot_info:
+            await bot.set_my_commands(commands)
+            if ADMIN_ID:
+                try:
+                    await bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(chat_id=ADMIN_ID))
+                except Exception:
+                    pass
 
         if webhook_host:
             WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
             webhook_url = f"https://{webhook_host}{WEBHOOK_PATH}"
-            
-            await bot.set_webhook(
-                webhook_url,
-                drop_pending_updates=False,
-                allowed_updates=dp.resolve_used_update_types()
-            )
+            await bot.set_webhook(webhook_url, drop_pending_updates=False)
             logging.info(f"Webhook set to: {webhook_url}")
-            
+
             app = web.Application()
             webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
             webhook_requests_handler.register(app, path=WEBHOOK_PATH)
-            
             app.router.add_get('/', handle_health_check)
             app.router.add_get('/healthz', handle_health_check)
             setup_application(app, dp, bot=bot)
-            
-            port = int(HTTP_PORT_STR) if HTTP_PORT_STR else 10000
+
+            port = int(HTTP_PORT_STR) if HTTP_PORT_STR else 3000
             runner = web.AppRunner(app)
             await runner.setup()
             site = web.TCPSite(runner, '0.0.0.0', port)
             await site.start()
-            logging.info(f"Bot started with webhook on port {port}")
-            
+            logging.info(f"Bot web server running on port {port}")
             while True:
                 await asyncio.sleep(3600)
         else:
-            logging.info("Starting with polling mode...")
-            await dp.start_polling(bot, skip_updates=True)
+            if BOT_TOKEN != "MOCK_TOKEN_CONFIG_REQUIRED" and bot_info:
+                logging.info("Starting bot in polling mode...")
+                await dp.start_polling(bot, skip_updates=True)
+            else:
+                logging.info("Bot configured. Awaiting credentials in .env to begin polling.")
+                while True:
+                    await asyncio.sleep(3600)
 
     except Exception as e:
         logging.critical(f"Fatal error during main execution: {e}", exc_info=True)
     finally:
-        logging.info("Shutting down...")
-        if webhook_host:
-            try: await bot.delete_webhook(drop_pending_updates=False)
-            except Exception: pass
         if bot and bot.session:
             await bot.session.close()
         if db:
             await db.close()
-        logging.info("Bot stopped.")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logging.info("Bot stopped by user.")
+        logging.info("Bot stopped.")
