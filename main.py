@@ -695,7 +695,7 @@ def get_admin_music_menu() -> InlineKeyboardMarkup:
 # CONFESSIONS & COMMUNITY HANDLERS
 # ==========================================
 @dp.message(Command("start"))
-async def send_welcome(message: types.Message, state: FSMContext):
+async def send_welcome(message: types.Message, state: FSMContext, command: Optional[CommandObject] = None):
     await state.clear()
     user_id = message.from_user.id
     theme = get_current_theme()
@@ -717,6 +717,19 @@ async def send_welcome(message: types.Message, state: FSMContext):
             f"{COMMUNITY_RULES_TEXT}\n\n"
             "Please confirm agreement before submitting or viewing confessions:",
             reply_markup=builder.as_markup()
+        )
+        return
+
+    # Deep-link support: e.g., t.me/bot?start=prompt
+    if command and command.args == "prompt":
+        await state.update_data(active_prompt=today_prompt, selected_categories=["Other"])
+        await state.set_state(ConfessionForm.writing_confession)
+        await message.answer(
+            f"💡 <b>Responding to Daily Campus Reflection:</b>\n"
+            f"Theme: <b>{html.quote(theme_title)}</b> (<code>{html.quote(tag)}</code>)\n\n"
+            f"<i>\"{html.quote(today_prompt)}\"</i>\n\n"
+            "Please send your anonymous response below (or attach a photo with your text as caption):\n"
+            "<i>Your identity remains 100% confidential. Send /cancel to stop.</i>"
         )
         return
 
@@ -784,6 +797,179 @@ async def cb_prompt_respond(callback_query: types.CallbackQuery, state: FSMConte
         "Please send your confession text below (or attach a single photo with your text as caption).\n"
         "<i>Send /cancel to stop.</i>"
     )
+
+@dp.message(Command("postprompt"))
+async def cmd_postprompt(message: types.Message, command: Optional[CommandObject] = None):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⚠️ <b>Unauthorized:</b> Only bot administrators can broadcast reflection prompts.")
+        return
+
+    # Custom prompt text if provided via /postprompt <custom text>, otherwise today's prompt
+    custom_text = command.args.strip() if (command and command.args) else None
+    prompt_text = custom_text or get_today_prompt()
+    tag, theme_title, _ = get_today_theme()
+
+    channel_target = CHANNEL_ID
+    if not channel_target or channel_target == "@channel":
+        await message.answer(
+            "⚠️ <b>Channel ID Not Configured:</b> <code>CHANNEL_ID</code> is missing or placeholder.\n"
+            "Please configure your channel username or ID (e.g. <code>@MyChannel</code>) in your environment variables."
+        )
+        return
+
+    # Determine bot username for direct-action deep link
+    global bot_info
+    if not bot_info:
+        try:
+            bot_info = await bot.get_me()
+        except Exception:
+            pass
+
+    builder = InlineKeyboardBuilder()
+    if bot_info and bot_info.username:
+        builder.button(
+            text="✍️ Answer Anonymously",
+            url=f"https://t.me/{bot_info.username}?start=prompt"
+        )
+    builder.adjust(1)
+
+    channel_post = (
+        f"💡 <b>Daily Campus Reflection</b>\n"
+        f"Theme: <b>{html.quote(theme_title)}</b> (<code>{html.quote(tag)}</code>)\n\n"
+        f"<i>\"{html.quote(prompt_text)}\"</i>\n\n"
+        f"🔒 <i>Tap below to share your anonymous response or confession!</i>"
+    )
+
+    try:
+        sent_msg = await bot.send_message(
+            chat_id=channel_target,
+            text=channel_post,
+            reply_markup=builder.as_markup() if (bot_info and bot_info.username) else None
+        )
+        await message.answer(
+            f"✅ <b>Daily Prompt broadcasted successfully to channel!</b>\n\n"
+            f"📢 <b>Target Channel:</b> <code>{html.quote(str(channel_target))}</code>\n"
+            f"🆔 <b>Message ID:</b> <code>{sent_msg.message_id}</code>\n\n"
+            f"💡 <b>Prompt:</b> <i>\"{html.quote(prompt_text)}\"</i>"
+        )
+    except Exception as e:
+        logging.error(f"Failed to post prompt to channel {channel_target}: {e}", exc_info=True)
+        await message.answer(
+            f"❌ <b>Failed to post prompt to channel:</b>\n"
+            f"<code>{html.quote(str(e))}</code>\n\n"
+            f"💡 <b>Troubleshooting:</b>\n"
+            f"1. Ensure the channel handle or ID is correct (e.g. <code>@MyChannel</code> or <code>-100...</code>).\n"
+            f"2. Ensure your bot is added as an <b>Administrator</b> to the channel.\n"
+            f"3. Ensure the bot has <b>'Post Messages'</b> permission enabled."
+        )
+
+@dp.message(Command("warn"))
+async def cmd_warn(message: types.Message, command: Optional[CommandObject] = None):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⚠️ Unauthorized.")
+        return
+
+    if not command or not command.args:
+        await message.answer("<b>Usage:</b> <code>/warn &lt;user_id&gt; [reason]</code>")
+        return
+
+    parts = command.args.strip().split(maxsplit=1)
+    try:
+        target_uid = int(parts[0])
+    except ValueError:
+        await message.answer("❌ Invalid User ID. Must be a numeric Telegram ID.")
+        return
+
+    reason = parts[1] if len(parts) > 1 else "Violation of campus community guidelines"
+    warn_text = (
+        f"⚠️ <b>Official Community Warning</b> 🛡️\n\n"
+        f"Your recent activity violated the vault's zero-doxxing or safety guidelines.\n\n"
+        f"<b>Reason:</b> {html.quote(reason)}\n\n"
+        f"<i>Please review /rules. Repeated violations will result in an immediate temporary or permanent ban.</i>"
+    )
+
+    try:
+        await bot.send_message(target_uid, warn_text)
+        await message.answer(f"✅ Warning sent to user <code>{target_uid}</code>.")
+    except Exception as e:
+        await message.answer(f"❌ Could not deliver warning to <code>{target_uid}</code>: {e}")
+
+@dp.message(Command("block"))
+async def cmd_block(message: types.Message, command: Optional[CommandObject] = None):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⚠️ Unauthorized.")
+        return
+
+    if not command or not command.args:
+        await message.answer(
+            "<b>Usage:</b> <code>/block &lt;user_id&gt; [hours] [reason]</code>\n"
+            "• Use 0 hours or omit hours for permanent ban.\n"
+            "<i>Example: /block 12345678 24 Repeated doxxing</i>"
+        )
+        return
+
+    parts = command.args.strip().split(maxsplit=2)
+    try:
+        target_uid = int(parts[0])
+    except ValueError:
+        await message.answer("❌ Invalid User ID. Must be numeric.")
+        return
+
+    hours = 0
+    reason_idx = 1
+    if len(parts) > 1 and parts[1].isdigit():
+        hours = int(parts[1])
+        reason_idx = 2
+
+    reason = " ".join(parts[reason_idx:]) if len(parts) > reason_idx else "Violating community safety guidelines"
+    blocked_until = datetime.now(timezone.utc) + timedelta(hours=hours) if hours > 0 else None
+
+    if db:
+        async with db.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO user_status (user_id, is_blocked, blocked_until, block_reason)
+                VALUES ($1, TRUE, $2, $3)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    is_blocked = TRUE,
+                    blocked_until = $2,
+                    block_reason = $3
+            """, target_uid, blocked_until, reason)
+
+    dur_str = f"{hours} hour(s)" if hours > 0 else "indefinitely"
+    await message.answer(f"🚫 User <code>{target_uid}</code> has been suspended {dur_str}.\nReason: <i>{html.quote(reason)}</i>")
+
+@dp.message(Command("unblock"))
+async def cmd_unblock(message: types.Message, command: Optional[CommandObject] = None):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⚠️ Unauthorized.")
+        return
+
+    if not command or not command.args:
+        await message.answer("<b>Usage:</b> <code>/unblock &lt;user_id&gt;</code>")
+        return
+
+    try:
+        target_uid = int(command.args.strip().split()[0])
+    except ValueError:
+        await message.answer("❌ Invalid User ID.")
+        return
+
+    if db:
+        async with db.acquire() as conn:
+            await conn.execute("""
+                UPDATE user_status
+                SET is_blocked = FALSE, blocked_until = NULL, block_reason = NULL
+                WHERE user_id = $1
+            """, target_uid)
+
+    await message.answer(f"✅ User <code>{target_uid}</code> has been unblocked.")
+    try:
+        await bot.send_message(
+            target_uid,
+            "🕊️ <b>Access Restored:</b> Your account restriction has been lifted by the administrator. Welcome back to the vault!"
+        )
+    except Exception:
+        pass
 
 @dp.message(Command("profile"))
 async def cmd_profile(message: types.Message):
