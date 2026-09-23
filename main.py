@@ -233,14 +233,17 @@ HELP_TEXT = (
     "• /confess — Submit an anonymous confession\n"
     "• /music — 🎵 Dedicate a song anonymously to your crush or channel\n"
     "• /prompt — View today's reflection prompt\n"
-    "• /profile — Check your Aura points & badges\n"
+    "• /profile — Check your Aura points, submitted confessions & reflections\n"
     "• /leaderboard — View top supportive peers\n"
+    "• /privacy — Privacy information & cryptographic anonymity\n"
+    "• /contact — Send a private inquiry to administrators\n"
     "• /rules — Read the zero-doxxing safety rules\n"
     "• /cancel — Cancel any active submission\n\n"
     "<b>Admin Commands:</b>\n"
     "• /adminmusic — 🎵 Music Library & Dedications Moderation\n"
     "• /settheme — Switch community theme (Enkutatash 2019, Finals, etc.)\n"
     "• /postprompt — Broadcast today's prompt to the channel\n"
+    "• /id <user_id> — Inspect user profile & activity\n"
     "• /warn, /block, /unblock — Moderation controls"
 )
 
@@ -577,8 +580,121 @@ class ConfessionForm(StatesGroup):
     selecting_categories = State()
     writing_confession = State()
 
+class CommentForm(StatesGroup):
+    waiting_for_comment = State()
+    waiting_for_reply = State()
+
+class ContactAdminForm(StatesGroup):
+    waiting_for_message = State()
+
+class AdminActions(StatesGroup):
+    waiting_for_rejection_reason = State()
+
 class RulesConsentForm(StatesGroup):
     pending_consent = State()
+
+# --- Helper Cryptographic / Identity & Reaction Utilities ---
+def get_anonymized_alias(user_id: int) -> str:
+    salt = (user_id * 31) % 900 + 100
+    return f"Confidant #{salt}"
+
+def get_reaction_meta(r_type: str) -> Dict[str, str]:
+    theme = get_current_theme()
+    if "reactions" in theme and r_type in theme["reactions"]:
+        return theme["reactions"][r_type]
+    for t in THEMES.values():
+        if "reactions" in t and r_type in t["reactions"]:
+            return t["reactions"][r_type]
+    return {"emoji": "❤️", "label": "Support"}
+
+async def get_comment_reactions_counts(comment_id: int) -> Dict[str, int]:
+    theme = get_current_theme()
+    counts = {k: 0 for k in theme.get("reactions", {}).keys()}
+    if not counts:
+        counts = {"notalone": 0, "heard": 0, "support": 0}
+    if not db:
+        return counts
+    try:
+        async with db.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT reaction_type, COUNT(*) as cnt 
+                FROM reactions 
+                WHERE comment_id = $1 
+                GROUP BY reaction_type
+            """, comment_id)
+            for r in rows:
+                counts[r['reaction_type']] = int(r['cnt'])
+    except Exception as e:
+        logging.warning(f"Error fetching reaction counts for comment {comment_id}: {e}")
+    return counts
+
+async def build_comment_keyboard(comment_id: int, commenter_user_id: int, viewer_user_id: int, confession_owner_id: int):
+    counts = await get_comment_reactions_counts(comment_id)
+    theme = get_current_theme()
+    builder = InlineKeyboardBuilder()
+    reactions = theme.get("reactions", {
+        "notalone": {"emoji": "🫂", "label": "Not Alone"},
+        "heard": {"emoji": "🕯️", "label": "Heard"},
+        "support": {"emoji": "❤️", "label": "Support"}
+    })
+    for r_type, r_meta in reactions.items():
+        cnt = counts.get(r_type, 0)
+        builder.button(text=f"{r_meta['emoji']} {cnt}", callback_data=f"react_{r_type}_{comment_id}")
+    builder.button(text="↪️ Reply", callback_data=f"reply_{comment_id}")
+    builder.button(text="⚠️ Report", callback_data=f"report_confirm_{comment_id}")
+
+    if viewer_user_id == confession_owner_id and viewer_user_id != commenter_user_id:
+        builder.button(text="🤝 Request Contact", callback_data=f"req_contact_{comment_id}")
+        builder.adjust(3, 2, 1)
+    else:
+        builder.adjust(3, 2)
+    return builder.as_markup()
+
+async def get_comment_sequence_number(conn: asyncpg.Connection, comment_id: int, confession_id: int) -> Optional[int]:
+    query = """
+        WITH ranked_comments AS (
+            SELECT id, ROW_NUMBER() OVER (ORDER BY created_at ASC) as rn
+            FROM comments
+            WHERE confession_id = $1
+        )
+        SELECT rn FROM ranked_comments WHERE id = $2;
+    """
+    try:
+        return await conn.fetchval(query, confession_id, comment_id)
+    except Exception as e:
+        logging.error(f"Could not fetch sequence number for comment {comment_id}: {e}")
+        return None
+
+async def update_channel_post_button(confession_id: int):
+    global bot_info
+    if not bot_info:
+        try:
+            bot_info = await bot.get_me()
+        except Exception:
+            return
+    if not db:
+        return
+    try:
+        async with db.acquire() as conn:
+            conf_data = await conn.fetchrow("SELECT message_id FROM confessions WHERE id = $1 AND status = 'approved'", confession_id)
+            count = await conn.fetchval("SELECT COUNT(*) FROM comments WHERE confession_id = $1", confession_id) or 0
+        if not conf_data or not conf_data['message_id']:
+            return
+        ch_msg_id = conf_data['message_id']
+        link = f"https://t.me/{bot_info.username}?start=view_{confession_id}"
+        markup = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"💬 Safe Room & Comments ({count})", url=link)
+        ]])
+        await bot.edit_message_reply_markup(chat_id=CHANNEL_ID, message_id=ch_msg_id, reply_markup=markup)
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e).lower():
+            pass
+        elif "message to edit not found" in str(e).lower():
+            logging.warning(f"Channel msg {ch_msg_id} not found in {CHANNEL_ID} (conf {confession_id}).")
+        else:
+            logging.error(f"Failed edit channel post {ch_msg_id} for conf {confession_id}: {e}")
+    except Exception as e:
+        logging.error(f"Error updating button for conf {confession_id}: {e}")
 
 class BlockUserMiddleware(BaseMiddleware):
     async def __call__(self, handler: Callable[[types.TelegramObject, Dict[str, Any]], Any], event: types.TelegramObject, data: Dict[str, Any]) -> Any:
@@ -694,6 +810,168 @@ def get_admin_music_menu() -> InlineKeyboardMarkup:
 # ==========================================
 # CONFESSIONS & COMMUNITY HANDLERS
 # ==========================================
+async def display_confession_safe_room(user_id: int, conf_id: int, target_msg: types.Message):
+    if not db:
+        await target_msg.answer("Database temporarily unavailable.")
+        return
+
+    async with db.acquire() as conn:
+        conf_data = await conn.fetchrow("""
+            SELECT c.id, c.text, c.categories, c.status, c.user_id, c.photo_file_id, c.prompt_text, COUNT(com.id) as comment_count 
+            FROM confessions c 
+            LEFT JOIN comments com ON c.id = com.confession_id 
+            WHERE c.id = $1 
+            GROUP BY c.id
+        """, conf_id)
+
+    if not conf_data or conf_data['status'] != 'approved':
+        await target_msg.answer(f"⚠️ Confession #{conf_id} was not found or is no longer available.")
+        return
+
+    comm_count = conf_data['comment_count']
+    categories = conf_data['categories'] or []
+    category_tags = " ".join([f"#{html.quote(cat.replace(' ', ''))}" for cat in categories]) if categories else "#Confession"
+    prompt_line = f"💡 <b>Prompt:</b> <i>\"{html.quote(conf_data['prompt_text'])}\"</i>\n\n" if conf_data.get('prompt_text') else ""
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="💬 Add Support / Reflection", callback_data=f"add_{conf_id}")
+    builder.button(text=f"📜 Browse Reflections ({comm_count})", callback_data=f"browse_{conf_id}")
+    builder.adjust(1, 1)
+
+    theme = get_current_theme()
+    channel_header = theme.get("header_branding", "MWU Confession")
+    header_text = f"<b>{html.quote(channel_header)} #{conf_id}</b>"
+
+    if conf_data['photo_file_id']:
+        caption = f"{header_text}\n\n{prompt_line}{html.quote(conf_data['text'])}\n\n{category_tags}"
+        if len(caption) > 1024:
+            caption = caption[:1020] + "..."
+        await bot.send_photo(
+            chat_id=user_id,
+            photo=conf_data['photo_file_id'],
+            caption=caption,
+            reply_markup=builder.as_markup()
+        )
+    else:
+        txt = f"{header_text}\n\n{prompt_line}{html.quote(conf_data['text'])}\n\n{category_tags}"
+        await target_msg.answer(txt, reply_markup=builder.as_markup())
+
+async def show_comments_for_confession(user_id: int, confession_id: int, message_to_edit: Optional[types.Message] = None, page: int = 1):
+    if not db:
+        await safe_send_message(user_id, "Database temporarily unavailable.")
+        return
+
+    async with db.acquire() as conn:
+        conf_data = await conn.fetchrow("SELECT status, user_id FROM confessions WHERE id = $1", confession_id)
+        if not conf_data or conf_data['status'] != 'approved':
+            err_txt = f"Confession #{confession_id} not found or not approved."
+            if message_to_edit:
+                try:
+                    await message_to_edit.edit_text(err_txt, reply_markup=None)
+                except Exception:
+                    await safe_send_message(user_id, err_txt)
+            else:
+                await safe_send_message(user_id, err_txt)
+            return
+
+        confession_owner_id = conf_data['user_id']
+        total_count = await conn.fetchval("SELECT COUNT(*) FROM comments WHERE confession_id = $1", confession_id) or 0
+        if total_count == 0:
+            msg_text = (
+                f"💬 <b>Safe Room &amp; Reflections for Confession #{confession_id}</b>\n\n"
+                "<i>No reflections or comments yet. Be the first to share support and kindness!</i>"
+            )
+            nav = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="➕ Add Reflection", callback_data=f"add_{confession_id}")],
+                [InlineKeyboardButton(text="⬅️ Back to Confession", callback_data=f"browse_back_{confession_id}")]
+            ])
+            if message_to_edit:
+                try:
+                    await message_to_edit.edit_text(msg_text, reply_markup=nav)
+                except Exception:
+                    await safe_send_message(user_id, msg_text, reply_markup=nav)
+            else:
+                await safe_send_message(user_id, msg_text, reply_markup=nav)
+            return
+
+        total_pages = (total_count + PAGE_SIZE - 1) // PAGE_SIZE
+        page = max(1, min(page, total_pages))
+        offset = (page - 1) * PAGE_SIZE
+        comments_raw = await conn.fetch("""
+            SELECT c.id, c.user_id, c.text, c.sticker_file_id, c.animation_file_id, c.parent_comment_id, c.created_at, 
+                   COALESCE(up.points, 0) as user_points 
+            FROM comments c 
+            LEFT JOIN user_points up ON c.user_id = up.user_id 
+            WHERE c.confession_id = $1 
+            ORDER BY c.created_at ASC 
+            LIMIT $2 OFFSET $3
+        """, confession_id, PAGE_SIZE, offset)
+
+    db_id_to_message_id: Dict[int, int] = {}
+
+    for i, c_data_row in enumerate(comments_raw):
+        c_data = dict(c_data_row)
+        seq_num = offset + i + 1
+        db_id = c_data['id']
+        commenter_uid = c_data['user_id']
+        u_pts = c_data.get('user_points', 0)
+        u_tier = get_aura_tier(u_pts)
+        u_badge = u_tier.split()[0]
+        alias = get_anonymized_alias(commenter_uid)
+        tag = "🌟 Author" if commenter_uid == confession_owner_id else "👤 You" if commenter_uid == user_id else f"🌱 {alias}"
+        admin_info = f" [<code>UID:{commenter_uid}</code>]" if user_id == ADMIN_ID else ""
+        display_tag = f" {tag} (🏅{u_pts} {u_badge})"
+
+        reply_to_msg_id = None
+        text_reply_prefix = ""
+        parent_db_id = c_data.get('parent_comment_id')
+        if parent_db_id:
+            if parent_db_id in db_id_to_message_id:
+                reply_to_msg_id = db_id_to_message_id[parent_db_id]
+            else:
+                async with db.acquire() as conn_for_seq:
+                    parent_seq = await get_comment_sequence_number(conn_for_seq, parent_db_id, confession_id)
+                if parent_seq:
+                    text_reply_prefix = f"↪️ <i>Replying to reflection #{parent_seq}...</i>\n"
+                else:
+                    text_reply_prefix = "↪️ <i>Replying to another reflection...</i>\n"
+
+        metadata_text = f"<i>#{seq_num}{display_tag}{admin_info}</i>"
+        keyboard = await build_comment_keyboard(db_id, commenter_uid, user_id, confession_owner_id)
+
+        sent_msg = None
+        try:
+            if c_data['sticker_file_id']:
+                sent_msg = await bot.send_sticker(user_id, sticker=c_data['sticker_file_id'], reply_to_message_id=reply_to_msg_id)
+                await bot.send_message(user_id, f"{text_reply_prefix}{metadata_text}", reply_markup=keyboard)
+            elif c_data['animation_file_id']:
+                sent_msg = await bot.send_animation(user_id, animation=c_data['animation_file_id'], reply_to_message_id=reply_to_msg_id)
+                await bot.send_message(user_id, f"{text_reply_prefix}{metadata_text}", reply_markup=keyboard)
+            elif c_data['text']:
+                full_text = f"{text_reply_prefix}💬 {html.quote(c_data['text'])}\n\n{metadata_text}"
+                sent_msg = await bot.send_message(user_id, full_text, reply_markup=keyboard, disable_web_page_preview=True, reply_to_message_id=reply_to_msg_id)
+            if sent_msg:
+                db_id_to_message_id[db_id] = sent_msg.message_id
+        except Exception as e:
+            logging.warning(f"Could not send comment #{seq_num} to {user_id}: {e}")
+        await asyncio.sleep(0.05)
+
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"comments_page_{confession_id}_{page-1}"))
+    if total_pages > 1:
+        nav_row.append(InlineKeyboardButton(text=f"Page {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"comments_page_{confession_id}_{page+1}"))
+
+    nav_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        nav_row,
+        [InlineKeyboardButton(text="➕ Add Reflection", callback_data=f"add_{confession_id}")],
+        [InlineKeyboardButton(text="⬅️ Back to Confession", callback_data=f"browse_back_{confession_id}")]
+    ])
+    end_txt = f"--- Showing reflections {offset+1} to {min(offset+PAGE_SIZE, total_count)} of {total_count} for Confession #{confession_id} ---"
+    await safe_send_message(user_id, end_txt, reply_markup=nav_keyboard)
+
 @dp.message(Command("start"))
 async def send_welcome(message: types.Message, state: FSMContext, command: Optional[CommandObject] = None):
     await state.clear()
@@ -720,18 +998,37 @@ async def send_welcome(message: types.Message, state: FSMContext, command: Optio
         )
         return
 
-    # Deep-link support: e.g., t.me/bot?start=prompt
-    if command and command.args == "prompt":
-        await state.update_data(active_prompt=today_prompt, selected_categories=["Other"])
-        await state.set_state(ConfessionForm.writing_confession)
-        await message.answer(
-            f"💡 <b>Responding to Daily Campus Reflection:</b>\n"
-            f"Theme: <b>{html.quote(theme_title)}</b> (<code>{html.quote(tag)}</code>)\n\n"
-            f"<i>\"{html.quote(today_prompt)}\"</i>\n\n"
-            "Please send your anonymous response below (or attach a photo with your text as caption):\n"
-            "<i>Your identity remains 100% confidential. Send /cancel to stop.</i>"
-        )
-        return
+    # Deep-link support: e.g., t.me/bot?start=prompt or ?start=prompt_X or ?start=view_X
+    if command and command.args:
+        args = command.args.strip()
+        if args == "prompt" or args.startswith("prompt_"):
+            prompt_to_answer = today_prompt
+            if args.startswith("prompt_"):
+                try:
+                    p_idx = int(args.split("_", 1)[1])
+                    if 0 <= p_idx < len(DAILY_PROMPTS):
+                        prompt_to_answer = DAILY_PROMPTS[p_idx]
+                except Exception:
+                    pass
+
+            await state.update_data(active_prompt=prompt_to_answer, selected_categories=["Other"])
+            await state.set_state(ConfessionForm.writing_confession)
+            await message.answer(
+                f"💡 <b>Responding to Daily Campus Reflection:</b>\n"
+                f"Theme: <b>{html.quote(theme_title)}</b> (<code>{html.quote(tag)}</code>)\n\n"
+                f"<i>\"{html.quote(prompt_to_answer)}\"</i>\n\n"
+                "Please send your anonymous response below (or attach a photo with your text as caption):\n"
+                "<i>Your identity remains 100% confidential. Send /cancel to stop.</i>"
+            )
+            return
+
+        elif args.startswith("view_"):
+            try:
+                conf_id = int(args.split("_", 1)[1])
+                await display_confession_safe_room(user_id, conf_id, message)
+                return
+            except Exception as e:
+                logging.error(f"Error opening view deep link {args}: {e}")
 
     builder = InlineKeyboardBuilder()
     builder.button(text="✍️ Write Anonymous Confession", callback_data="start_confess_button")
@@ -997,12 +1294,23 @@ async def show_profile(user_id: int, message_or_event):
         f"🎖️ <b>Rank &amp; Title:</b> {tier}\n"
         f"✨ <b>Community Aura:</b> <code>{points} pts</code>\n\n"
         f"📝 <b>Confessions Shared:</b> {conf_count}\n"
-        f"💬 <b>Supportive Comments:</b> {comm_count}\n\n"
+        f"💬 <b>Supportive Reflections:</b> {comm_count}\n\n"
         f"<i>Earn Aura points by sharing courageous confessions (+{POINTS_PER_CONFESSION}), "
         f"offering empathetic comments (+{POINTS_PER_COMMENT}), and receiving reactions (+{POINTS_PER_REACTION_RECEIVED})!</i>"
     )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📜 My Confessions", callback_data="profile_menu_confessions_1"),
+            InlineKeyboardButton(text="💬 My Reflections", callback_data="profile_menu_comments_1")
+        ],
+        [
+            InlineKeyboardButton(text="🏆 View Leaderboard", callback_data="view_leaderboard_button")
+        ]
+    ])
     if isinstance(message_or_event, types.Message):
-        await message_or_event.answer(text)
+        await message_or_event.answer(text, reply_markup=keyboard)
+    elif isinstance(message_or_event, types.CallbackQuery):
+        await message_or_event.message.edit_text(text, reply_markup=keyboard)
 
 @dp.message(Command("leaderboard"))
 async def cmd_leaderboard(message: types.Message):
@@ -1180,11 +1488,16 @@ async def handle_admin_approve_conf(callback_query: types.CallbackQuery):
             f"{cats} {tag}"
         )
 
+        link = f"https://t.me/{bot_info.username}?start=view_{conf_id}" if bot_info else ""
+        channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="💬 Safe Room & Comments (0)", url=link)
+        ]]) if link else None
+
         try:
             if conf['photo_file_id']:
-                c_msg = await bot.send_photo(CHANNEL_ID, photo=conf['photo_file_id'], caption=channel_post)
+                c_msg = await bot.send_photo(CHANNEL_ID, photo=conf['photo_file_id'], caption=channel_post, reply_markup=channel_kbd)
             else:
-                c_msg = await bot.send_message(CHANNEL_ID, text=channel_post)
+                c_msg = await bot.send_message(CHANNEL_ID, text=channel_post, reply_markup=channel_kbd)
 
             await conn.execute("UPDATE confessions SET status = 'approved', message_id = $1 WHERE id = $2", c_msg.message_id, conf_id)
             await callback_query.answer("Approved and broadcasted!")
@@ -1218,6 +1531,752 @@ async def cancel_callback(callback_query: types.CallbackQuery, state: FSMContext
 async def cancel_any_state(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Action cancelled.", reply_markup=ReplyKeyboardRemove())
+
+# --- Safe Room & Comments Interaction Handlers ---
+@dp.callback_query(F.data.startswith("browse_"))
+async def browse_comments_action(callback_query: types.CallbackQuery):
+    parts = callback_query.data.split("_")
+    if len(parts) >= 3 and parts[1] == "back":
+        conf_id = int(parts[2])
+        await display_confession_safe_room(callback_query.from_user.id, conf_id, callback_query.message)
+        await callback_query.answer()
+        return
+    conf_id = int(parts[1])
+    await callback_query.answer("Loading reflections...")
+    await show_comments_for_confession(callback_query.from_user.id, conf_id, callback_query.message)
+
+@dp.callback_query(F.data.startswith("add_"))
+async def add_comment_prompt(callback_query: types.CallbackQuery, state: FSMContext):
+    conf_id = int(callback_query.data.split("_", 1)[1])
+    await state.update_data(confession_id=conf_id, parent_comment_id=None)
+    await state.set_state(CommentForm.waiting_for_comment)
+    await safe_send_message(
+        callback_query.from_user.id,
+        f"💬 <b>Adding Supportive Reflection to Confession #{conf_id}</b>\n\n"
+        "Please send your reflection below (text message, sticker, or GIF).\n"
+        "<i>Your identity remains 100% anonymous. Type /cancel to abort.</i>"
+    )
+    await callback_query.answer()
+
+@dp.callback_query(F.data.startswith("comments_page_"))
+async def comments_page_callback(callback_query: types.CallbackQuery):
+    _, _, conf_id, page = callback_query.data.split("_")
+    await callback_query.answer("Loading page...")
+    await show_comments_for_confession(callback_query.from_user.id, int(conf_id), callback_query.message, page=int(page))
+
+@dp.message(CommentForm.waiting_for_comment, F.text | F.sticker | F.animation)
+async def receive_comment(message: types.Message, state: FSMContext):
+    if message.text and message.text.startswith('/cancel'):
+        await cancel_any_state(message, state)
+        return
+
+    user_id = message.from_user.id
+    data = await state.get_data()
+    conf_id = data.get("confession_id")
+    if not conf_id:
+        await message.answer("⚠️ Session context lost. Please try again.")
+        await state.clear()
+        return
+
+    comm_text, sticker_id, animation_id, log_type = None, None, None, "Unknown"
+    if message.text:
+        comm_text, log_type = message.text.strip(), "Text"
+    elif message.sticker:
+        sticker_id, log_type = message.sticker.file_id, "Sticker"
+    elif message.animation:
+        animation_id, log_type = message.animation.file_id, "GIF"
+    else:
+        await message.answer("Please send text, a sticker, or a GIF.")
+        return
+
+    try:
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                conf_owner_id = await conn.fetchval("SELECT user_id FROM confessions WHERE id = $1 AND status = 'approved'", conf_id)
+                if not conf_owner_id:
+                    raise Exception("Confession not found or not approved.")
+                await conn.execute("""
+                    INSERT INTO comments (confession_id, user_id, text, sticker_file_id, animation_file_id) 
+                    VALUES ($1, $2, $3, $4, $5)
+                """, conf_id, user_id, comm_text, sticker_id, animation_id)
+
+        await message.answer(f"💬 <b>Your reflection has been posted anonymously! (+{POINTS_PER_COMMENT} Aura 🏅)</b>")
+        await award_points(user_id, POINTS_PER_COMMENT)
+        await update_channel_post_button(conf_id)
+
+        if conf_owner_id and conf_owner_id != user_id and bot_info:
+            link = f"https://t.me/{bot_info.username}?start=view_{conf_id}"
+            preview = html.quote(comm_text[:120]) if comm_text else f"[{log_type}]"
+            await safe_send_message(
+                conf_owner_id,
+                f"💌 <b>Someone left a supportive reflection on your Confession #{conf_id}!</b>\n\n"
+                f"<i>\"{preview}...\"</i>\n\n"
+                f"<a href='{link}'>Click here to view the reflection in your safe room.</a>",
+                disable_web_page_preview=True
+            )
+        await show_comments_for_confession(user_id, conf_id)
+    except Exception as e:
+        logging.error(f"Error saving comment for conf #{conf_id}: {e}", exc_info=True)
+        await message.answer("❌ Error saving reflection. The confession may have been deleted.")
+    finally:
+        await state.clear()
+
+@dp.callback_query(F.data.startswith("reply_"))
+async def reply_comment_prompt(callback_query: types.CallbackQuery, state: FSMContext):
+    parent_id = int(callback_query.data.split("_", 1)[1])
+    if not db:
+        await callback_query.answer("Database unavailable.")
+        return
+    async with db.acquire() as conn:
+        comm_data = await conn.fetchrow("SELECT confession_id, text, sticker_file_id, animation_file_id, user_id FROM comments WHERE id = $1", parent_id)
+    if not comm_data:
+        await callback_query.answer("Comment no longer exists.", show_alert=True)
+        return
+    if callback_query.from_user.id == comm_data['user_id']:
+        await callback_query.answer("You cannot reply to your own reflection.", show_alert=True)
+        return
+
+    try:
+        if comm_data['text']:
+            await safe_send_message(callback_query.from_user.id, f"<i>Replying to:</i>\n\n{html.quote(comm_data['text'])}")
+        elif comm_data['sticker_file_id']:
+            await bot.send_sticker(callback_query.from_user.id, sticker=comm_data['sticker_file_id'])
+        elif comm_data['animation_file_id']:
+            await bot.send_animation(callback_query.from_user.id, animation=comm_data['animation_file_id'])
+
+        prompt_message = await bot.send_message(
+            callback_query.from_user.id,
+            "⬆️ Please send your reply now (text, sticker, or GIF), or type /cancel.",
+            reply_markup=ForceReply(input_field_placeholder="Your reply...")
+        )
+
+        await state.update_data(
+            confession_id=comm_data['confession_id'],
+            parent_comment_id=parent_id,
+            message_id_to_reply_to=prompt_message.message_id
+        )
+        await state.set_state(CommentForm.waiting_for_reply)
+        await callback_query.answer()
+    except Exception as e:
+        logging.error(f"Error starting reply prompt: {e}", exc_info=True)
+        await callback_query.answer("Could not start reply process.", show_alert=True)
+        await state.clear()
+
+@dp.message(CommentForm.waiting_for_reply, F.text | F.sticker | F.animation)
+async def receive_reply(message: types.Message, state: FSMContext):
+    if message.text and message.text.startswith('/cancel'):
+        await cancel_any_state(message, state)
+        return
+
+    user_id = message.from_user.id
+    data = await state.get_data()
+    conf_id = data.get("confession_id")
+    parent_id = data.get("parent_comment_id")
+
+    if not conf_id or not parent_id:
+        await message.answer("⚠️ Reply context expired. Please click 'Reply' again or type /cancel.")
+        await state.clear()
+        return
+
+    reply_text, sticker_id, animation_id, log_type = None, None, None, "Unknown"
+    if message.text:
+        reply_text, log_type = message.text.strip(), "Text Reply"
+    elif message.sticker:
+        sticker_id, log_type = message.sticker.file_id, "Sticker Reply"
+    elif message.animation:
+        animation_id, log_type = message.animation.file_id, "GIF Reply"
+    else:
+        await message.answer("Invalid content type for a reply.")
+        return
+
+    try:
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                parent_data = await conn.fetchrow("SELECT user_id FROM comments WHERE id = $1", parent_id)
+                if not parent_data:
+                    await message.answer("⚠️ The reflection you were replying to has been deleted.")
+                    await state.clear()
+                    return
+                conf_data = await conn.fetchrow("SELECT user_id FROM confessions WHERE id = $1", conf_id)
+
+                await conn.execute("""
+                    INSERT INTO comments (confession_id, user_id, text, sticker_file_id, animation_file_id, parent_comment_id) 
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                """, conf_id, user_id, reply_text, sticker_id, animation_id, parent_id)
+
+        await message.answer(f"↪️ <b>Your reply has been posted! (+{POINTS_PER_COMMENT} Aura 🏅)</b>", reply_markup=ReplyKeyboardRemove())
+        await award_points(user_id, POINTS_PER_COMMENT)
+        await update_channel_post_button(conf_id)
+
+        if parent_data['user_id'] != user_id and bot_info:
+            link = f"https://t.me/{bot_info.username}?start=view_{conf_id}"
+            preview = html.quote(reply_text[:120]) if reply_text else f"[{log_type.replace(' Reply', '')}]"
+            tag = "(Confession Author)" if conf_data and user_id == conf_data['user_id'] else "A peer"
+            await safe_send_message(
+                parent_data['user_id'],
+                f"↪️ <b>{tag} replied to your reflection on Confession #{conf_id}:</b>\n\n<i>\"{preview}...\"</i>\n\n<a href='{link}'>Click here to view the reply.</a>",
+                disable_web_page_preview=True
+            )
+
+        await show_comments_for_confession(user_id, conf_id)
+    except Exception as e:
+        logging.error(f"Error saving reply: {e}", exc_info=True)
+        await message.answer("❌ Error saving reply.")
+    finally:
+        await state.clear()
+
+# --- Emotional Micro-Interactions Handler ---
+@dp.callback_query(F.data.startswith("react_"))
+async def handle_reaction(callback_query: types.CallbackQuery):
+    parts = callback_query.data.split("_")
+    r_type = parts[1]
+    comm_id = int(parts[2])
+    user_id = callback_query.from_user.id
+    meta = get_reaction_meta(r_type)
+    point_delta, alert = 0, ""
+
+    if not db:
+        await callback_query.answer("Database unavailable.")
+        return
+
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            info = await conn.fetchrow("""
+                SELECT c.user_id as comm_uid, c.confession_id, co.user_id as conf_owner_id 
+                FROM comments c 
+                JOIN confessions co ON c.confession_id = co.id 
+                WHERE c.id = $1
+            """, comm_id)
+            if not info:
+                await callback_query.answer("Reflection not found.", show_alert=True)
+                return
+            if info['comm_uid'] == user_id:
+                await callback_query.answer("You cannot react to your own reflection.", show_alert=True)
+                return
+
+            existing = await conn.fetchval("SELECT reaction_type FROM reactions WHERE comment_id = $1 AND user_id = $2", comm_id, user_id)
+            if existing:
+                if existing == r_type:
+                    await conn.execute("DELETE FROM reactions WHERE comment_id = $1 AND user_id = $2", comm_id, user_id)
+                    point_delta = -POINTS_PER_REACTION_RECEIVED
+                    alert = f"Removed {meta['emoji']}"
+                else:
+                    await conn.execute("UPDATE reactions SET reaction_type = $1 WHERE comment_id = $2 AND user_id = $3", r_type, comm_id, user_id)
+                    alert = f"Changed to {meta['label']} {meta['emoji']}"
+            else:
+                await conn.execute("INSERT INTO reactions (comment_id, user_id, reaction_type) VALUES ($1, $2, $3)", comm_id, user_id, r_type)
+                point_delta = POINTS_PER_REACTION_RECEIVED
+                alert = f"Added {meta['label']} {meta['emoji']}"
+
+                # Real-time encouragement notification
+                asyncio.create_task(safe_send_message(
+                    info['comm_uid'],
+                    f"{meta['emoji']} A peer felt your reflection on Confession #{info['confession_id']}:\n"
+                    f"<i>\"{meta['label']}\"</i> (+{POINTS_PER_REACTION_RECEIVED} Aura 🏅)"
+                ))
+
+            if point_delta != 0:
+                await award_points(info['comm_uid'], point_delta)
+
+    kbd = await build_comment_keyboard(comm_id, info['comm_uid'], user_id, info['conf_owner_id'])
+    try:
+        await callback_query.message.edit_reply_markup(reply_markup=kbd)
+        await callback_query.answer(alert)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logging.warning(f"Reaction edit markup failed: {e}")
+        else:
+            await callback_query.answer(alert)
+
+# --- Reporting Flow ---
+@dp.callback_query(F.data.startswith("report_confirm_"))
+async def report_confirm_callback(callback_query: types.CallbackQuery):
+    comment_id = int(callback_query.data.split("_")[-1])
+    reporter_user_id = callback_query.from_user.id
+    if not db:
+        return
+    async with db.acquire() as conn:
+        comment_data = await conn.fetchrow("SELECT text, user_id FROM comments WHERE id = $1", comment_id)
+        if not comment_data:
+            await callback_query.answer("Comment deleted.", show_alert=True)
+            return
+        if comment_data['user_id'] == reporter_user_id:
+            await callback_query.answer("You cannot report your own reflection.", show_alert=True)
+            return
+
+    snippet = html.quote(comment_data['text'][:100]) if comment_data['text'] else "[Media/Sticker]"
+    confirm_text = f"Are you sure you want to report this reflection for administrative moderation?\n\n<i>\"{snippet}...\"</i>"
+    kbd = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Yes, Report", callback_data=f"report_execute_{comment_id}"), 
+        InlineKeyboardButton(text="❌ No, Cancel", callback_data="report_cancel")
+    ]])
+    await safe_send_message(reporter_user_id, confirm_text, reply_markup=kbd)
+    await callback_query.answer()
+
+@dp.callback_query(F.data.startswith("report_execute_"))
+async def report_execute_callback(callback_query: types.CallbackQuery):
+    comment_id = int(callback_query.data.split("_")[-1])
+    reporter_user_id = callback_query.from_user.id
+    if not db:
+        return
+    try:
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                comment_data = await conn.fetchrow("SELECT user_id, confession_id, text FROM comments WHERE id = $1", comment_id)
+                if not comment_data:
+                    await callback_query.message.edit_text("Report failed: Comment no longer exists.")
+                    return
+                reported_user_id = comment_data['user_id']
+                await conn.execute("""
+                    INSERT INTO reports (comment_id, reporter_user_id, reported_user_id) 
+                    VALUES ($1, $2, $3) 
+                    ON CONFLICT (comment_id, reporter_user_id) DO NOTHING
+                """, comment_id, reporter_user_id, reported_user_id)
+
+        snippet = html.quote(comment_data['text'][:200]) if comment_data['text'] else "[Media]"
+        conf_link = f"https://t.me/{bot_info.username}?start=view_{comment_data['confession_id']}" if bot_info else ""
+        admin_notification = (
+            f"⚠️ <b>New Comment Report</b> 🛡️\n\n"
+            f"<b>Confession:</b> <a href='{conf_link}'>#{comment_data['confession_id']}</a>\n"
+            f"<b>Comment ID:</b> <code>{comment_id}</code>\n"
+            f"<b>Content:</b>\n<i>{snippet}</i>\n\n"
+            f"<b>Reported User ID:</b> <code>{reported_user_id}</code>\n"
+            f"<b>Reporter User ID:</b> <code>{reporter_user_id}</code>"
+        )
+        await safe_send_message(ADMIN_ID, admin_notification, disable_web_page_preview=True)
+        await callback_query.message.edit_text("✅ <b>Report Submitted:</b> Our moderators have been notified to review the content.")
+        await callback_query.answer("Report sent.")
+    except Exception as e:
+        logging.error(f"Error reporting comment {comment_id}: {e}")
+        await callback_query.message.edit_text("❌ An error occurred while submitting the report.")
+
+@dp.callback_query(F.data == "report_cancel")
+async def report_cancel_callback(callback_query: types.CallbackQuery):
+    await callback_query.message.edit_text("Report process cancelled.")
+    await callback_query.answer("Cancelled.")
+
+# --- Contact Request & Consent Verification ---
+@dp.callback_query(F.data.startswith("req_contact_"))
+async def handle_request_contact(callback_query: types.CallbackQuery):
+    comm_id = int(callback_query.data.split("_")[-1])
+    requester_uid = callback_query.from_user.id
+    if not db:
+        return
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            comm_data = await conn.fetchrow("""
+                SELECT c.user_id as comm_uid, c.text, co.id as conf_id, co.user_id as conf_owner_id 
+                FROM comments c 
+                JOIN confessions co ON c.confession_id = co.id 
+                WHERE c.id = $1
+            """, comm_id)
+            if not comm_data:
+                await callback_query.answer("Reflection not found.", show_alert=True)
+                return
+            commenter_uid, conf_id, conf_owner_id = comm_data['comm_uid'], comm_data['conf_id'], comm_data['conf_owner_id']
+            if requester_uid != conf_owner_id:
+                await callback_query.answer("Only the author of this confession can initiate contact.", show_alert=True)
+                return
+            if requester_uid == commenter_uid:
+                await callback_query.answer("You cannot contact yourself.", show_alert=True)
+                return
+
+            existing_req = await conn.fetchval("SELECT status FROM contact_requests WHERE comment_id = $1 AND requester_user_id = $2", comm_id, requester_uid)
+            if existing_req and existing_req not in ['denied', 'failed_to_notify']:
+                await callback_query.answer(f"Contact request already pending (status: {existing_req}).", show_alert=True)
+                return
+
+            req_id = await conn.fetchval("""
+                INSERT INTO contact_requests (confession_id, comment_id, requester_user_id, requested_user_id, status) 
+                VALUES ($1, $2, $3, $4, 'pending')
+                ON CONFLICT (comment_id, requester_user_id) DO UPDATE SET status = 'pending', updated_at = CURRENT_TIMESTAMP
+                RETURNING id
+            """, conf_id, comm_id, requester_uid, commenter_uid)
+
+            snippet = html.quote(comm_data['text'][:100]) if comm_data['text'] else "[Media]"
+            notification_to_commenter = (
+                f"🤝 <b>Contact Request from Confession Author</b>\n\n"
+                f"The author of Confession #{conf_id} was touched by your reflection:\n"
+                f"<i>\"{snippet}...\"</i>\n\n"
+                "Would you like to share your Telegram @username with them? Your numeric User ID is never disclosed."
+            )
+            kbd = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="✅ Approve & Share Username", callback_data=f"approve_contact_{req_id}"),
+                InlineKeyboardButton(text="❌ Deny Request", callback_data=f"deny_contact_{req_id}")
+            ]])
+            sent = await safe_send_message(commenter_uid, notification_to_commenter, reply_markup=kbd)
+            if sent:
+                await callback_query.answer("✅ Contact request sent to the commenter.", show_alert=False)
+            else:
+                await conn.execute("UPDATE contact_requests SET status = 'failed_to_notify' WHERE id = $1", req_id)
+                await callback_query.answer("⚠️ Could not notify commenter (they may have paused the bot).", show_alert=True)
+
+@dp.callback_query(F.data.startswith(("approve_contact_", "deny_contact_")))
+async def handle_contact_response(callback_query: types.CallbackQuery):
+    action, _, req_id_str = callback_query.data.partition("_contact_")
+    try:
+        req_id = int(req_id_str)
+    except ValueError:
+        await callback_query.answer("Invalid request ID.", show_alert=True)
+        return
+
+    responder_uid = callback_query.from_user.id
+    if not db:
+        return
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            req_data = await conn.fetchrow("SELECT * FROM contact_requests WHERE id = $1", req_id)
+            if not req_data:
+                await callback_query.answer("Request not found.", show_alert=True)
+                return
+            if responder_uid != req_data['requested_user_id']:
+                await callback_query.answer("This request is not addressed to you.", show_alert=True)
+                return
+            if req_data['status'] != 'pending':
+                await callback_query.answer(f"Request already {req_data['status']}.", show_alert=True)
+                return
+
+            author_uid = req_data['requester_user_id']
+            conf_id = req_data['confession_id']
+
+            if action == "approve":
+                username = callback_query.from_user.username
+                if not username:
+                    try:
+                        chat_info = await bot.get_chat(responder_uid)
+                        username = chat_info.username
+                    except Exception:
+                        username = None
+
+                if username:
+                    await conn.execute("UPDATE contact_requests SET status = 'approved', updated_at = CURRENT_TIMESTAMP WHERE id = $1", req_id)
+                    notification_to_author = f"✅ <b>Contact Approved for Confession #{conf_id}!</b>\nYou can reach the commenter at: @{html.quote(username)}"
+                    await callback_query.message.edit_text(callback_query.message.html_text + "\n\n-- ✅ Approved. Your username has been shared. --", reply_markup=None)
+                else:
+                    await conn.execute("UPDATE contact_requests SET status = 'approved_no_username', updated_at = CURRENT_TIMESTAMP WHERE id = $1", req_id)
+                    notification_to_author = f"⚠️ <b>Contact Approved for Confession #{conf_id}</b>, but the commenter does not have a public @username set in Telegram."
+                    await callback_query.message.edit_text(callback_query.message.html_text + "\n\n-- Approved, but you do not have a public username. --", reply_markup=None)
+            else:
+                await conn.execute("UPDATE contact_requests SET status = 'denied', updated_at = CURRENT_TIMESTAMP WHERE id = $1", req_id)
+                notification_to_author = f"❌ The commenter for Confession #{conf_id} politely declined your contact request."
+                await callback_query.message.edit_text(callback_query.message.html_text + "\n\n-- ❌ Denied. The author has been notified. --", reply_markup=None)
+
+            await safe_send_message(author_uid, notification_to_author)
+            await callback_query.answer("Response recorded.")
+
+# --- Profile Menus & Confession Deletion Requests ---
+def create_profile_pagination_keyboard(base_callback: str, current_page: int, total_pages: int):
+    builder = InlineKeyboardBuilder()
+    row = []
+    if current_page > 1:
+        row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"{base_callback}_{current_page - 1}"))
+    if total_pages > 1:
+        row.append(InlineKeyboardButton(text=f"Page {current_page}/{total_pages}", callback_data="noop"))
+    if current_page < total_pages:
+        row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"{base_callback}_{current_page + 1}"))
+    if row:
+        builder.row(*row)
+    builder.row(InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_menu_main_1"))
+    return builder.as_markup()
+
+@dp.callback_query(F.data.startswith("profile_menu_"))
+async def handle_profile_menu(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    parts = callback_query.data.split("_")
+    action = parts[2]
+    page = int(parts[-1])
+
+    try:
+        if action == "main":
+            await show_profile(user_id, callback_query)
+        elif action == "confessions":
+            if not db:
+                await callback_query.answer("Database unavailable.")
+                return
+            async with db.acquire() as conn:
+                total_count = await conn.fetchval("SELECT COUNT(*) FROM confessions WHERE user_id = $1", user_id) or 0
+                if total_count == 0:
+                    await callback_query.answer("You haven't submitted any confessions yet.", show_alert=True)
+                    return
+
+                total_pages = (total_count + 5 - 1) // 5
+                page = max(1, min(page, total_pages))
+                offset = (page - 1) * 5
+                confessions = await conn.fetch("""
+                    SELECT id, text, status, created_at, photo_file_id 
+                    FROM confessions 
+                    WHERE user_id = $1 
+                    ORDER BY created_at DESC 
+                    LIMIT 5 OFFSET $2
+                """, user_id, offset)
+
+            response_text = f"<b>📜 Your Confessions (Page {page}/{total_pages})</b>\n\n"
+            builder = InlineKeyboardBuilder()
+            for conf in confessions:
+                snippet = html.quote(conf['text'][:60]) + ('...' if len(conf['text']) > 60 else '')
+                status_emoji = {"approved": "✅", "pending": "⏳", "rejected": "❌", "deleted": "🗑️"}.get(conf['status'], "❓")
+                photo_indicator = " 📷" if conf['photo_file_id'] else ""
+                response_text += f"<b>ID:</b> #{conf['id']} ({status_emoji} {conf['status'].capitalize()}{photo_indicator})\n<i>\"{snippet}\"</i>\n\n"
+                if conf['status'] in ['approved', 'pending']:
+                    builder.row(InlineKeyboardButton(text=f"🗑️ Request Deletion #{conf['id']}", callback_data=f"req_del_conf_{conf['id']}"))
+
+            nav_keyboard = create_profile_pagination_keyboard("profile_menu_confessions", page, total_pages)
+            final_markup = builder.attach(InlineKeyboardBuilder.from_markup(nav_keyboard)).as_markup()
+            await callback_query.message.edit_text(response_text, reply_markup=final_markup)
+
+        elif action == "comments":
+            if not db:
+                await callback_query.answer("Database unavailable.")
+                return
+            async with db.acquire() as conn:
+                total_count = await conn.fetchval("SELECT COUNT(*) FROM comments WHERE user_id = $1", user_id) or 0
+                if total_count == 0:
+                    await callback_query.answer("You haven't made any comments or reflections yet.", show_alert=True)
+                    return
+
+                total_pages = (total_count + 5 - 1) // 5
+                page = max(1, min(page, total_pages))
+                offset = (page - 1) * 5
+                comments = await conn.fetch("""
+                    SELECT id, text, sticker_file_id, animation_file_id, confession_id, created_at 
+                    FROM comments 
+                    WHERE user_id = $1 
+                    ORDER BY created_at DESC 
+                    LIMIT 5 OFFSET $2
+                """, user_id, offset)
+
+            response_text = f"<b>💬 Your Reflections (Page {page}/{total_pages})</b>\n\n"
+            for comm in comments:
+                if comm['text']:
+                    snippet = "💬 " + html.quote(comm['text'][:60]) + ('...' if len(comm['text']) > 60 else '')
+                elif comm['sticker_file_id']:
+                    snippet = "[Sticker]"
+                elif comm['animation_file_id']:
+                    snippet = "[GIF]"
+                else:
+                    snippet = "[Content]"
+                link = f"https://t.me/{bot_info.username}?start=view_{comm['confession_id']}" if bot_info else ""
+                response_text += f"On Confession <a href='{link}'>#{comm['confession_id']}</a>:\n<i>\"{snippet}\"</i>\n\n"
+
+            nav_keyboard = create_profile_pagination_keyboard("profile_menu_comments", page, total_pages)
+            await callback_query.message.edit_text(response_text, reply_markup=nav_keyboard, disable_web_page_preview=True)
+
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logging.warning(f"Error handling profile menu: {e}")
+    finally:
+        await callback_query.answer()
+
+@dp.callback_query(F.data.startswith("req_del_conf_"))
+async def request_deletion_prompt(callback_query: types.CallbackQuery):
+    conf_id = int(callback_query.data.split("_")[-1])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Yes, Request Deletion", callback_data=f"confirm_del_conf_{conf_id}")],
+        [InlineKeyboardButton(text="❌ No, Cancel", callback_data="profile_menu_confessions_1")]
+    ])
+    await callback_query.message.edit_text(
+        f"Are you sure you want to request deletion of Confession #{conf_id}? If approved by an administrator, it will be permanently removed from the channel.",
+        reply_markup=keyboard
+    )
+    await callback_query.answer()
+
+@dp.callback_query(F.data.startswith("confirm_del_conf_"))
+async def confirm_deletion_request(callback_query: types.CallbackQuery):
+    conf_id = int(callback_query.data.split("_")[-1])
+    user_id = callback_query.from_user.id
+    if not db:
+        return
+    async with db.acquire() as conn:
+        try:
+            conf_data = await conn.fetchrow("SELECT user_id, text, status FROM confessions WHERE id = $1", conf_id)
+            if not conf_data or conf_data['user_id'] != user_id:
+                await callback_query.answer("This is not your confession.", show_alert=True)
+                return
+            if conf_data['status'] not in ['approved', 'pending']:
+                await callback_query.answer(f"Cannot delete confession with status '{conf_data['status']}'.", show_alert=True)
+                return
+
+            await conn.execute("""
+                INSERT INTO deletion_requests (confession_id, user_id, status) VALUES ($1, $2, 'pending')
+                ON CONFLICT (confession_id, user_id) DO NOTHING
+            """, conf_id, user_id)
+
+            snippet = html.quote(conf_data['text'][:200])
+            admin_text = (
+                f"🗑️ <b>New Deletion Request</b>\n\n"
+                f"<b>User ID:</b> <code>{user_id}</code>\n"
+                f"<b>Confession ID:</b> <code>{conf_id}</code>\n\n"
+                f"<b>Content Snippet:</b>\n<i>\"{snippet}...\"</i>"
+            )
+            admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Approve Deletion", callback_data=f"admin_approve_delete_{conf_id}")],
+                [InlineKeyboardButton(text="❌ Reject Deletion", callback_data=f"admin_reject_delete_{conf_id}")]
+            ])
+            await bot.send_message(ADMIN_ID, admin_text, reply_markup=admin_keyboard)
+            await callback_query.answer("✅ Deletion request sent. An admin will review it shortly.", show_alert=True)
+            callback_query.data = "profile_menu_confessions_1"
+            await handle_profile_menu(callback_query)
+
+        except asyncpg.exceptions.UniqueViolationError:
+            await callback_query.answer("You have already requested deletion for this confession.", show_alert=True)
+        except Exception as e:
+            logging.error(f"Error processing deletion request for conf {conf_id} by user {user_id}: {e}")
+            await callback_query.answer("An error occurred while sending your request.", show_alert=True)
+
+@dp.callback_query(F.data.startswith(("admin_approve_delete_", "admin_reject_delete_")))
+async def admin_handle_deletion_request(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer("Unauthorized.", show_alert=True)
+        return
+
+    parts = callback_query.data.split("_")
+    action = parts[1]
+    conf_id = int(parts[-1])
+    final_status = ""
+
+    if not db:
+        return
+
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            req_data = await conn.fetchrow("SELECT id, user_id FROM deletion_requests WHERE confession_id = $1 AND status = 'pending'", conf_id)
+            if not req_data:
+                await callback_query.answer("Request not found or already processed.", show_alert=True)
+                return
+
+            if action == "approve":
+                conf_to_delete = await conn.fetchrow("SELECT message_id, user_id FROM confessions WHERE id = $1", conf_id)
+                await conn.execute("UPDATE deletion_requests SET status = 'approved', reviewed_at = CURRENT_TIMESTAMP WHERE id = $1", req_data['id'])
+                if conf_to_delete:
+                    if conf_to_delete['message_id']:
+                        try:
+                            await bot.delete_message(chat_id=CHANNEL_ID, message_id=conf_to_delete['message_id'])
+                        except Exception as e:
+                            logging.warning(f"Could not delete channel message {conf_to_delete.get('message_id')}: {e}")
+                    await conn.execute("DELETE FROM confessions WHERE id = $1", conf_id)
+
+                await safe_send_message(req_data['user_id'], f"✅ Your request to delete Confession #{conf_id} has been approved.")
+                final_status = "Approved & Deleted"
+            else:
+                await conn.execute("UPDATE deletion_requests SET status = 'rejected', reviewed_at = CURRENT_TIMESTAMP WHERE id = $1", req_data['id'])
+                await safe_send_message(req_data['user_id'], f"❌ Your request to delete Confession #{conf_id} was rejected by the admin.")
+                final_status = "Rejected"
+
+    await callback_query.message.edit_text(callback_query.message.html_text + f"\n\n-- Deletion Request: {final_status} --", reply_markup=None)
+    await callback_query.answer(f"Request {final_status}.")
+
+# --- Privacy, Administration Contact & User Inspection Commands ---
+@dp.message(Command("privacy"))
+async def show_privacy(message: types.Message):
+    privacy_text = (
+        "<b>Privacy Information & Cryptographic Anonymity</b> 🔒\n\n"
+        "▪️ <b>Zero-Identity Isolation:</b> Your numeric Telegram ID is stored securely in an isolated database and never posted publicly.\n"
+        "▪️ <b>Safe Expression:</b> Confessions and comments are stripped of your Telegram handle.\n"
+        "▪️ <b>Consent-Driven Contact:</b> If a confession author requests to connect, your @username is only shared with your explicit approval.\n"
+        f"▪️ <b>Community Moderation:</b> Our administration (ID: <code>{ADMIN_ID}</code>) moderates submissions to keep the vault zero-doxxing and safe."
+    )
+    await message.answer(privacy_text)
+
+@dp.message(Command("contact"))
+async def cmd_contact_admin(message: types.Message, state: FSMContext):
+    await state.set_state(ContactAdminForm.waiting_for_message)
+    await message.answer(
+        "✉️ <b>Contact Bot Administrators</b>\n\n"
+        "Please send your private feedback, report, or inquiry below.\n"
+        "Type /cancel to abort.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+@dp.message(ContactAdminForm.waiting_for_message, F.text)
+async def receive_admin_message(message: types.Message, state: FSMContext):
+    if message.text.startswith('/cancel'):
+        await state.clear()
+        await message.answer("Contact message cancelled.", reply_markup=ReplyKeyboardRemove())
+        return
+
+    user_id = message.from_user.id
+    user_info = message.from_user
+    message_text = message.text.strip()
+    if len(message_text) < 5:
+        await message.answer("Message too short (minimum 5 characters).")
+        return
+    if len(message_text) > 2000:
+        await message.answer("Message too long (maximum 2000 characters).")
+        return
+
+    admin_message = (
+        f"<b>📬 Message from User to Administration</b>\n\n"
+        f"<b>User ID:</b> <code>{user_id}</code>\n"
+        f"<b>Username:</b> @{user_info.username if user_info.username else 'Not Set'}\n"
+        f"<b>Name:</b> {html.quote(user_info.full_name or 'N/A')}\n\n"
+        f"<b>Message:</b>\n{html.quote(message_text)}"
+        f"\n\n---\n<i>Reply to this message in Telegram to respond directly to User ID <code>{user_id}</code>.</i>"
+    )
+    try:
+        await bot.send_message(ADMIN_ID, admin_message)
+        await message.answer("✅ <b>Your message has been delivered to the administration!</b>", reply_markup=ReplyKeyboardRemove())
+    except Exception as e:
+        logging.error(f"Failed forward message to admin: {e}")
+        await message.answer("❌ Error sending message. Please try again later.")
+    finally:
+        await state.clear()
+
+@dp.message(F.from_user.id == ADMIN_ID, F.reply_to_message)
+async def handle_admin_reply(message: types.Message, state: FSMContext):
+    if await state.get_state() is not None:
+        return
+    replied_to = message.reply_to_message
+    if not replied_to or not bot_info or not replied_to.from_user or replied_to.from_user.id != bot_info.id:
+        return
+
+    text_to_search = replied_to.html_text or html.quote(replied_to.caption or "") or ""
+    match = re.search(r"User ID:\s*<code>(\d+)</code>", text_to_search, re.IGNORECASE)
+    if not match:
+        return
+
+    target_user_id = int(match.group(1))
+    sent = await safe_send_message(target_user_id, f"💬 <b>Official Admin Reply:</b>\n\n{html.quote(message.text or '')}")
+    if sent:
+        await message.reply("✅ Reply delivered to the user.")
+    else:
+        await message.reply("⚠️ Failed to deliver reply (user may have blocked the bot).")
+
+@dp.message(Command("id"))
+async def get_user_info_command(message: types.Message, command: CommandObject):
+    if not message.from_user or message.from_user.id != ADMIN_ID:
+        return
+    if not command.args:
+        await message.reply("Usage: <code>/id &lt;user_id&gt;</code>")
+        return
+    try:
+        target_user_id = int(command.args.strip())
+    except ValueError:
+        await message.reply("Invalid User ID.")
+        return
+    info_parts = [f"ℹ️ <b>User Info for ID:</b> <code>{target_user_id}</code>\n"]
+    try:
+        chat_info = await bot.get_chat(target_user_id)
+        info_parts.append(f"<b>Username:</b> @{html.quote(chat_info.username or 'Not Set')}")
+        info_parts.append(f"<b>First Name:</b> {html.quote(chat_info.first_name or 'N/A')}")
+    except Exception as e:
+        info_parts.append(f"⚠️ <b>Telegram Details:</b> Could not fetch ({e})")
+    if db:
+        try:
+            async with db.acquire() as conn:
+                user_points = await conn.fetchval("SELECT points FROM user_points WHERE user_id = $1", target_user_id) or 0
+                conf_count = await conn.fetchval("SELECT COUNT(*) FROM confessions WHERE user_id = $1", target_user_id) or 0
+                comm_count = await conn.fetchval("SELECT COUNT(*) FROM comments WHERE user_id = $1", target_user_id) or 0
+                status_data = await conn.fetchrow("SELECT is_blocked, blocked_until, has_accepted_rules FROM user_status WHERE user_id = $1", target_user_id)
+
+                info_parts.append(f"\n<b>Bot Activity:</b>\n  - <b>Aura Points:</b> 🏅 {user_points}\n  - <b>Confessions:</b> {conf_count}\n  - <b>Comments:</b> {comm_count}")
+                if status_data:
+                    info_parts.append(f"  - <b>Accepted Rules:</b> {'Yes' if status_data['has_accepted_rules'] else 'No'}")
+                    if status_data['is_blocked']:
+                        expiry = f"until {status_data['blocked_until'].strftime('%Y-%m-%d %H:%M')}" if status_data['blocked_until'] else "Permanently"
+                        info_parts.append(f"  - <b>Status:</b> ❌ Blocked ({expiry})")
+        except Exception as e:
+            info_parts.append(f"\n❌ Error fetching database info: {e}")
+    await message.reply("\n".join(info_parts))
 
 # ==========================================
 # MUSIC SYSTEM HANDLERS
@@ -2091,6 +3150,8 @@ async def main():
             types.BotCommand(command="prompt", description="Today's reflection prompt"),
             types.BotCommand(command="profile", description="Your Aura points & history"),
             types.BotCommand(command="leaderboard", description="Top supportive community peers"),
+            types.BotCommand(command="privacy", description="Privacy information & anonymity"),
+            types.BotCommand(command="contact", description="Contact administrators"),
             types.BotCommand(command="rules", description="Zero-doxxing safety rules"),
             types.BotCommand(command="help", description="Show help and commands"),
             types.BotCommand(command="cancel", description="Cancel current action"),
@@ -2099,6 +3160,7 @@ async def main():
             types.BotCommand(command="adminmusic", description="ADMIN: 🎵 Music Library & Moderation"),
             types.BotCommand(command="settheme", description="ADMIN: Dynamic Community Theme Switcher"),
             types.BotCommand(command="postprompt", description="ADMIN: Post daily prompt to channel"),
+            types.BotCommand(command="id", description="ADMIN: Inspect user info and activity"),
             types.BotCommand(command="rules", description="ADMIN: View safety rules"),
         ]
         if bot_info:
