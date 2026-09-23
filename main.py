@@ -831,7 +831,7 @@ async def display_confession_safe_room(user_id: int, conf_id: int, target_msg: t
     comm_count = conf_data['comment_count']
     categories = conf_data['categories'] or []
     category_tags = " ".join([f"#{html.quote(cat.replace(' ', ''))}" for cat in categories]) if categories else "#Confession"
-    prompt_line = f"💡 <b>Prompt:</b> <i>\"{html.quote(conf_data['prompt_text'])}\"</i>\n\n" if conf_data.get('prompt_text') else ""
+    prompt_section = f"💡 <b>Prompt / Question:</b>\n<i>\"{html.quote(conf_data['prompt_text'])}\"</i>\n\n💬 <b>Response:</b>\n" if conf_data.get('prompt_text') else ""
 
     builder = InlineKeyboardBuilder()
     builder.button(text="💬 Add Support / Reflection", callback_data=f"add_{conf_id}")
@@ -843,7 +843,7 @@ async def display_confession_safe_room(user_id: int, conf_id: int, target_msg: t
     header_text = f"<b>{html.quote(channel_header)} #{conf_id}</b>"
 
     if conf_data['photo_file_id']:
-        caption = f"{header_text}\n\n{prompt_line}{html.quote(conf_data['text'])}\n\n{category_tags}"
+        caption = f"{header_text}\n\n{prompt_section}{html.quote(conf_data['text'])}\n\n{category_tags}"
         if len(caption) > 1024:
             caption = caption[:1020] + "..."
         await bot.send_photo(
@@ -853,7 +853,7 @@ async def display_confession_safe_room(user_id: int, conf_id: int, target_msg: t
             reply_markup=builder.as_markup()
         )
     else:
-        txt = f"{header_text}\n\n{prompt_line}{html.quote(conf_data['text'])}\n\n{category_tags}"
+        txt = f"{header_text}\n\n{prompt_section}{html.quote(conf_data['text'])}\n\n{category_tags}"
         await target_msg.answer(txt, reply_markup=builder.as_markup())
 
 async def show_comments_for_confession(user_id: int, confession_id: int, message_to_edit: Optional[types.Message] = None, page: int = 1):
@@ -1446,11 +1446,18 @@ async def process_confession_content(message: types.Message, state: FSMContext):
 
     # Admin Alert
     if ADMIN_ID and bot_info:
+        user_mention = f"@{message.from_user.username}" if (message.from_user and message.from_user.username) else "No @username"
+        user_fullname = html.quote(message.from_user.full_name) if (message.from_user and message.from_user.full_name) else "Unknown"
+        prompt_line = f"💡 <b>Prompt / Question:</b>\n<i>\"{html.quote(active_prompt)}\"</i>\n\n" if active_prompt else ""
+        content_label = "💬 <b>Response / Answer:</b>" if active_prompt else "📝 <b>Content:</b>"
+
         admin_text = (
             f"🛡️ <b>NEW CONFESSION #{conf_id} AWAITING APPROVAL</b>\n\n"
-            f"<b>Categories:</b> {', '.join(selected_cats)}\n"
-            f"<b>Prompt:</b> {html.quote(active_prompt) if active_prompt else 'None'}\n\n"
-            f"<b>Content:</b>\n{html.quote(text)}"
+            f"👤 <b>Poster ID:</b> <code>{user_id}</code>\n"
+            f"👤 <b>User Info:</b> {user_mention} ({user_fullname})\n"
+            f"🏷️ <b>Categories:</b> {', '.join(selected_cats)}\n\n"
+            f"{prompt_line}"
+            f"{content_label}\n{html.quote(text)}"
         )
         mod_builder = InlineKeyboardBuilder()
         mod_builder.button(text="✅ Approve", callback_data=f"adm_appr_conf_{conf_id}")
@@ -1458,7 +1465,10 @@ async def process_confession_content(message: types.Message, state: FSMContext):
         mod_builder.adjust(2)
         try:
             if photo_id:
-                await bot.send_photo(ADMIN_ID, photo=photo_id, caption=admin_text, reply_markup=mod_builder.as_markup())
+                caption = admin_text
+                if len(caption) > 1024:
+                    caption = caption[:1020] + "..."
+                await bot.send_photo(ADMIN_ID, photo=photo_id, caption=caption, reply_markup=mod_builder.as_markup())
             else:
                 await bot.send_message(ADMIN_ID, text=admin_text, reply_markup=mod_builder.as_markup())
         except Exception as e:
@@ -1482,8 +1492,18 @@ async def handle_admin_approve_conf(callback_query: types.CallbackQuery):
 
         tag, theme_title, _ = get_today_theme()
         cats = " ".join([f"#{c.replace(' ', '')}" for c in (conf['categories'] or [])])
+        
+        prompt_section = ""
+        if conf.get('prompt_text'):
+            prompt_section = (
+                f"💡 <b>Campus Reflection Prompt:</b>\n"
+                f"<i>\"{html.quote(conf['prompt_text'])}\"</i>\n\n"
+                f"💬 <b>Response:</b>\n"
+            )
+
         channel_post = (
             f"📝 <b>Confession #{conf_id}</b>\n\n"
+            f"{prompt_section}"
             f"{html.quote(conf['text'])}\n\n"
             f"{cats} {tag}"
         )
@@ -1495,13 +1515,20 @@ async def handle_admin_approve_conf(callback_query: types.CallbackQuery):
 
         try:
             if conf['photo_file_id']:
-                c_msg = await bot.send_photo(CHANNEL_ID, photo=conf['photo_file_id'], caption=channel_post, reply_markup=channel_kbd)
+                caption = channel_post
+                if len(caption) > 1024:
+                    caption = caption[:1020] + "..."
+                c_msg = await bot.send_photo(CHANNEL_ID, photo=conf['photo_file_id'], caption=caption, reply_markup=channel_kbd)
             else:
                 c_msg = await bot.send_message(CHANNEL_ID, text=channel_post, reply_markup=channel_kbd)
 
             await conn.execute("UPDATE confessions SET status = 'approved', message_id = $1 WHERE id = $2", c_msg.message_id, conf_id)
             await callback_query.answer("Approved and broadcasted!")
             await safe_send_message(conf['user_id'], f"🎉 <b>Your confession #{conf_id} was approved and posted to the channel!</b>")
+            try:
+                await callback_query.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
         except Exception as e:
             logging.error(f"Failed to post confession #{conf_id} to channel: {e}")
             await callback_query.answer("Error posting to channel.", show_alert=True)
@@ -1519,6 +1546,10 @@ async def handle_admin_reject_conf(callback_query: types.CallbackQuery):
             await conn.execute("UPDATE confessions SET status = 'rejected' WHERE id = $1", conf_id)
             if conf:
                 await safe_send_message(conf['user_id'], f"❌ <b>Your confession #{conf_id} was not approved for publication.</b>")
+    try:
+        await callback_query.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await callback_query.answer("Rejected.")
 
 @dp.callback_query(F.data == "cancel_action")
